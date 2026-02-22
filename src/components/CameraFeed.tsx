@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Loader2, RotateCcw, Zap, ZapOff, Activity } from "lucide-react";
+import { Loader2, RotateCcw, Zap, ZapOff, Activity, ScanEye, CheckCircle2 } from "lucide-react";
 import { holisticDetector } from "@/lib/mediapipeDetector";
 import { actionLstmPipeline } from "@/lib/actionLstmPipeline";
 import { LandmarkSmoother } from "@/lib/oneEuroFilter";
@@ -14,15 +14,16 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
   
   const [sessionKey, setSessionKey] = useState(0);
   const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
-  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [status, setStatus] = useState<"loading" | "calibrating" | "ready" | "error">("loading");
+  const [calibrationProgress, setCalibrationProgress] = useState(0);
   const [isSwitching, setIsSwitching] = useState(false);
   const [torch, setTorch] = useState(false);
   
-  // Debug state to show you the current confidence on mobile
   const [debugPrediction, setDebugPrediction] = useState<{action: string, conf: number} | null>(null);
 
   const processingLocked = useRef(false);
   const smootherRef = useRef(new LandmarkSmoother(1662));
+  const stabilityBuffer = useRef<string[]>([]);
 
   const cleanup = useCallback(() => {
     processingLocked.current = true;
@@ -76,21 +77,17 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
           return;
         }
 
-        // Set canvas internal dimensions to match video stream
         if (canvas.width !== video.videoWidth) {
           canvas.width = video.videoWidth;
           canvas.height = video.videoHeight;
         }
 
         ctx.save();
-        
-        // Mirroring logic for front camera
         if (facingMode === "user") {
           ctx.translate(canvas.width, 0);
           ctx.scale(-1, 1);
         }
 
-        // Draw video background
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
         if (holisticDetector.ready && !isPaused && !processingLocked.current) {
@@ -98,12 +95,10 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
           const features = await holisticDetector.extractFeatures(video, isEnv);
           const results = (holisticDetector as any).lastResults;
           
-          // Re-enabling hand traces (dots)
           if (results) {
             const win = window as any;
             const drawUtils = win.drawConnectors && win.drawLandmarks;
             
-            // Draw Hand Landmarks
             if (results.leftHandLandmarks) {
               win.drawConnectors(ctx, results.leftHandLandmarks, HAND_CONNECTIONS, { color: "#00FF00", lineWidth: 2 });
               win.drawLandmarks(ctx, results.leftHandLandmarks, { color: "#FFFFFF", lineWidth: 1, radius: 2 });
@@ -112,20 +107,41 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
               win.drawConnectors(ctx, results.rightHandLandmarks, HAND_CONNECTIONS, { color: "#00FF00", lineWidth: 2 });
               win.drawLandmarks(ctx, results.rightHandLandmarks, { color: "#FFFFFF", lineWidth: 1, radius: 2 });
             }
+
+            // CALIBRATION LOGIC
+            const hand = results.leftHandLandmarks || results.rightHandLandmarks;
+            if (status === "calibrating") {
+                // Check if hand is in center 40% of screen to avoid lens warping
+                const isInZone = hand && hand[0].x > 0.3 && hand[0].x < 0.7 && hand[0].y > 0.3 && hand[0].y < 0.7;
+                if (isInZone) {
+                    setCalibrationProgress(prev => {
+                        if (prev >= 100) { setStatus("ready"); return 100; }
+                        return prev + 2;
+                    });
+                } else {
+                    setCalibrationProgress(prev => Math.max(0, prev - 2));
+                }
+            }
           }
           
-          if (features && (results?.leftHandLandmarks || results?.rightHandLandmarks)) {
-            // Apply smoothing for mobile stability
+          if (status === "ready" && features && (results?.leftHandLandmarks || results?.rightHandLandmarks)) {
             const smoothedFeatures = smootherRef.current.smooth(features);
             actionLstmPipeline.pushFrame(smoothedFeatures);
-            
             const prediction = await actionLstmPipeline.predict();
             
             if (prediction) {
-              onSignDetected(prediction.action);
-              // Brief visual feedback for debug
-              setDebugPrediction({ action: prediction.action, conf: prediction.confidence });
-              setTimeout(() => setDebugPrediction(null), 1000);
+              // TEMPORAL STABILITY: Only trigger if we see the same sign 3 times in a row
+              stabilityBuffer.current.push(prediction.action);
+              if (stabilityBuffer.current.length > 3) stabilityBuffer.current.shift();
+              
+              const isStable = stabilityBuffer.current.every(v => v === prediction.action);
+
+              if (isStable) {
+                onSignDetected(prediction.action);
+                setDebugPrediction({ action: prediction.action, conf: prediction.confidence });
+                setTimeout(() => setDebugPrediction(null), 1200);
+                stabilityBuffer.current = []; // Reset after trigger
+              }
             }
           }
         }
@@ -135,13 +151,15 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
       };
       renderFrameRef.current = requestAnimationFrame(loop);
     } catch (e) { setStatus("error"); }
-  }, [facingMode, isPaused, onSignDetected, cleanup]);
+  }, [facingMode, isPaused, status, onSignDetected, cleanup]);
 
   const toggleCamera = async () => {
     if (isSwitching) return;
     setIsSwitching(true);
     cleanup();
     setTorch(false);
+    setCalibrationProgress(0);
+    setStatus("calibrating");
     actionLstmPipeline.clearBuffer(); 
     holisticDetector.reset(); 
     await new Promise(r => setTimeout(r, 500));
@@ -156,7 +174,7 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
         await holisticDetector.initialize();
         await actionLstmPipeline.initialize();
         await start();
-        setStatus("ready");
+        setStatus("calibrating");
         onModelsLoaded();
       };
       init();
@@ -170,36 +188,47 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
         <video ref={videoRef} className="hidden" playsInline muted />
         <canvas ref={canvasRef} className="w-full h-full object-cover" />
         
-        {/* Debug Overlay: Essential for high-confidence testing */}
+        {/* Progress & Target Box for Calibration */}
+        <AnimatePresence>
+            {status === "calibrating" && (
+                <motion.div exit={{ opacity: 0 }} className="absolute inset-0 flex flex-col items-center justify-center bg-black/30 backdrop-blur-[2px] z-20">
+                    <div className="w-48 h-64 border-2 border-dashed border-teal-400/60 rounded-3xl flex items-center justify-center relative">
+                        <ScanEye className="text-teal-400 w-12 h-12 animate-pulse" />
+                        <div className="absolute -bottom-10 w-full h-1.5 bg-white/20 rounded-full overflow-hidden">
+                            <motion.div className="h-full bg-teal-400" initial={{ width: 0 }} animate={{ width: `${calibrationProgress}%` }} />
+                        </div>
+                    </div>
+                    <p className="text-white text-[10px] font-black uppercase tracking-tighter mt-14 bg-black/50 px-3 py-1 rounded-full">
+                        Center your hand to calibrate mobile lens
+                    </p>
+                </motion.div>
+            )}
+        </AnimatePresence>
+
         {status === "ready" && (
-          <div className="absolute top-6 left-6 p-3 bg-black/60 backdrop-blur-md rounded-2xl border border-white/10 text-white text-xs flex items-center gap-2">
-            <Activity className="w-4 h-4 text-teal-400" />
-            <span>AI Sensitivity: <span className="text-teal-400 font-bold">0.85</span></span>
+          <div className="absolute top-6 left-6 p-3 bg-black/60 backdrop-blur-md rounded-2xl border border-white/10 text-white text-xs flex items-center gap-2 z-10">
+            <CheckCircle2 className="w-4 h-4 text-teal-400" />
+            <span>Lens Calibrated</span>
           </div>
         )}
 
         <AnimatePresence>
           {debugPrediction && (
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.8 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute top-20 left-6 p-4 bg-teal-500 rounded-2xl text-white font-bold shadow-lg"
-            >
-              Detected: {debugPrediction.action.toUpperCase()} ({Math.round(debugPrediction.conf * 100)}%)
+            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="absolute top-20 left-6 p-4 bg-teal-500 rounded-2xl text-white font-bold shadow-lg z-30">
+              {debugPrediction.action.toUpperCase()} ({Math.round(debugPrediction.conf * 100)}%)
             </motion.div>
           )}
 
           {(status === "loading" || isSwitching) && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 flex flex-col items-center justify-center bg-black/90 z-50">
               <Loader2 className="w-12 h-12 animate-spin text-teal-500 mb-4" />
-              <p className="text-white font-medium">Initializing Vision Engine...</p>
+              <p className="text-white font-medium">Powering up AI...</p>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {status === "ready" && !isSwitching && (
-          <div className="absolute bottom-8 right-6 flex flex-col gap-4">
+        {status !== "loading" && !isSwitching && (
+          <div className="absolute bottom-8 right-6 flex flex-col gap-4 z-30">
             {facingMode === "environment" && (
               <button onClick={toggleTorch} className="p-4 bg-yellow-500/20 hover:bg-yellow-500/40 backdrop-blur-2xl rounded-full text-yellow-400 border border-yellow-500/30">
                 {torch ? <Zap className="fill-current" /> : <ZapOff />}
