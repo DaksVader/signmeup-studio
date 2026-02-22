@@ -8,9 +8,6 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
     port: 8080,
-    hmr: {
-      overlay: false,
-    },
   },
   build: {
     rollupOptions: {
@@ -26,92 +23,43 @@ export default defineConfig(({ mode }) => ({
     mode === "development" && componentTagger(),
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: [
-        "favicon.ico",
-        "icons/SignLogo.png", // Updated to match your actual icon name
-        "icons/icon-192x192.png",
-        "icons/icon-512x512.png",
-      ],
+      injectRegister: 'inline', // Ensures the phone registers the SW immediately
+      includeAssets: ["favicon.ico", "icons/SignLogo.png", "icons/icon-192x192.png", "icons/icon-512x512.png"],
       manifest: {
-        name: "SignSpeak – Sign Language Recognition",
+        name: "SignSpeak",
         short_name: "SignSpeak",
-        description: "Real-time sign language recognition powered by AI",
+        description: "Sign Language AI Recognition",
         theme_color: "#0D9488",
         background_color: "#f8fafb",
-        display: "standalone",
+        display: "standalone", // Makes it look like a real app on phone
         orientation: "portrait",
         start_url: "/",
         icons: [
-          {
-            src: "/icons/icon-192x192.png",
-            sizes: "192x192",
-            type: "image/png",
-          },
-          {
-            src: "/icons/icon-512x512.png",
-            sizes: "512x512",
-            type: "image/png",
-          },
-          {
-            src: "/icons/icon-512x512.png",
-            sizes: "512x512",
-            type: "image/png",
-            purpose: "maskable",
-          },
+          { src: "/icons/icon-192x192.png", sizes: "192x192", type: "image/png" },
+          { src: "/icons/icon-512x512.png", sizes: "512x512", type: "image/png" },
+          { src: "/icons/icon-512x512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
         ],
       },
       workbox: {
-        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024, 
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // Bumped to 5MB
         globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
         runtimeCaching: [
           {
-            // 🔥 NEW: Cache MediaPipe JS and WASM files for offline use
+            // Cache MediaPipe WASM and data files (this is what the phone needs offline)
             urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/npm\/@mediapipe.*/i,
             handler: "CacheFirst",
             options: {
-              cacheName: "mediapipe-assets",
-              expiration: {
-                maxEntries: 20,
-                maxAgeSeconds: 60 * 60 * 24 * 365, // 1 year
-              },
-              cacheableResponse: {
-                statuses: [0, 200],
-              },
-            },
-          },
-          {
-            urlPattern: /\/models\/yolo\/bestv8\.onnx$/,
-            handler: "CacheFirst",
-            options: {
-              cacheName: "yolo-model-cache",
-              expiration: { maxEntries: 1, maxAgeSeconds: 30 * 24 * 60 * 60 },
+              cacheName: "mediapipe-offline",
+              expiration: { maxEntries: 30, maxAgeSeconds: 60 * 60 * 24 * 365 },
               cacheableResponse: { statuses: [0, 200] },
             },
           },
           {
-            urlPattern: /\/models\/lstm\/.+$/,
+            urlPattern: /\/models\/.*/i,
             handler: "CacheFirst",
             options: {
-              cacheName: "lstm-model-cache",
-              expiration: { maxEntries: 5, maxAgeSeconds: 30 * 24 * 60 * 60 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-          {
-            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-            handler: "CacheFirst",
-            options: {
-              cacheName: "google-fonts-cache",
-              expiration: { maxEntries: 10, maxAgeSeconds: 365 * 24 * 60 * 60 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-          {
-            urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
-            handler: "CacheFirst",
-            options: {
-              cacheName: "gstatic-fonts-cache",
-              expiration: { maxEntries: 10, maxAgeSeconds: 365 * 24 * 60 * 60 },
+              cacheName: "ai-models",
+              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 30 },
               cacheableResponse: { statuses: [0, 200] },
             },
           },
