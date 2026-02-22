@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Loader2, RotateCcw, Zap, ZapOff } from "lucide-react";
+import { Loader2, RotateCcw, Zap, ZapOff, Activity } from "lucide-react";
 import { holisticDetector } from "@/lib/mediapipeDetector";
 import { actionLstmPipeline } from "@/lib/actionLstmPipeline";
 import { LandmarkSmoother } from "@/lib/oneEuroFilter";
@@ -18,6 +18,9 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
   const [isSwitching, setIsSwitching] = useState(false);
   const [torch, setTorch] = useState(false);
   
+  // Debug state to show you the current confidence on mobile
+  const [debugPrediction, setDebugPrediction] = useState<{action: string, conf: number} | null>(null);
+
   const processingLocked = useRef(false);
   const smootherRef = useRef(new LandmarkSmoother(1662));
 
@@ -48,7 +51,11 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
     cleanup();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: facingMode }, width: { ideal: 720 }, height: { ideal: 1280 } }
+        video: { 
+          facingMode: { ideal: facingMode }, 
+          width: { ideal: 1280 }, 
+          height: { ideal: 720 } 
+        }
       });
       streamRef.current = stream;
       if (videoRef.current) {
@@ -57,6 +64,7 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
       }
 
       processingLocked.current = false;
+      
       const loop = async () => {
         if (processingLocked.current || !videoRef.current || !canvasRef.current) return;
         const video = videoRef.current;
@@ -68,29 +76,60 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
           return;
         }
 
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
+        // Set canvas internal dimensions to match video stream
+        if (canvas.width !== video.videoWidth) {
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+        }
+
         ctx.save();
-        if (facingMode === "user") { ctx.translate(canvas.width, 0); ctx.scale(-1, 1); }
+        
+        // Mirroring logic for front camera
+        if (facingMode === "user") {
+          ctx.translate(canvas.width, 0);
+          ctx.scale(-1, 1);
+        }
+
+        // Draw video background
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
         if (holisticDetector.ready && !isPaused && !processingLocked.current) {
-          // Send camera state to detector for coordinate normalization
-          const features = await holisticDetector.extractFeatures(video, facingMode === "environment");
+          const isEnv = facingMode === "environment";
+          const features = await holisticDetector.extractFeatures(video, isEnv);
           const results = (holisticDetector as any).lastResults;
           
+          // Re-enabling hand traces (dots)
           if (results) {
             const win = window as any;
-            if (results.leftHandLandmarks) win.drawConnectors?.(ctx, results.leftHandLandmarks, HAND_CONNECTIONS, { color: "white", lineWidth: 2 });
-            if (results.rightHandLandmarks) win.drawConnectors?.(ctx, results.rightHandLandmarks, HAND_CONNECTIONS, { color: "white", lineWidth: 2 });
+            const drawUtils = win.drawConnectors && win.drawLandmarks;
+            
+            // Draw Hand Landmarks
+            if (results.leftHandLandmarks) {
+              win.drawConnectors(ctx, results.leftHandLandmarks, HAND_CONNECTIONS, { color: "#00FF00", lineWidth: 2 });
+              win.drawLandmarks(ctx, results.leftHandLandmarks, { color: "#FFFFFF", lineWidth: 1, radius: 2 });
+            }
+            if (results.rightHandLandmarks) {
+              win.drawConnectors(ctx, results.rightHandLandmarks, HAND_CONNECTIONS, { color: "#00FF00", lineWidth: 2 });
+              win.drawLandmarks(ctx, results.rightHandLandmarks, { color: "#FFFFFF", lineWidth: 1, radius: 2 });
+            }
           }
           
           if (features && (results?.leftHandLandmarks || results?.rightHandLandmarks)) {
-            actionLstmPipeline.pushFrame(smootherRef.current.smooth(features));
+            // Apply smoothing for mobile stability
+            const smoothedFeatures = smootherRef.current.smooth(features);
+            actionLstmPipeline.pushFrame(smoothedFeatures);
+            
             const prediction = await actionLstmPipeline.predict();
-            if (prediction) onSignDetected(prediction.action);
+            
+            if (prediction) {
+              onSignDetected(prediction.action);
+              // Brief visual feedback for debug
+              setDebugPrediction({ action: prediction.action, conf: prediction.confidence });
+              setTimeout(() => setDebugPrediction(null), 1000);
+            }
           }
         }
+        
         ctx.restore();
         renderFrameRef.current = requestAnimationFrame(loop);
       };
@@ -104,8 +143,8 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
     cleanup();
     setTorch(false);
     actionLstmPipeline.clearBuffer(); 
-    await holisticDetector.reset(); 
-    await new Promise(r => setTimeout(r, 1000));
+    holisticDetector.reset(); 
+    await new Promise(r => setTimeout(r, 500));
     setFacingMode(p => p === "user" ? "environment" : "user");
     setSessionKey(k => k + 1);
     setIsSwitching(false);
@@ -130,14 +169,35 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
       <div key={sessionKey} className="relative aspect-[3/4] md:aspect-video bg-black rounded-[2.5rem] overflow-hidden w-full shadow-2xl border-4 border-white/10">
         <video ref={videoRef} className="hidden" playsInline muted />
         <canvas ref={canvasRef} className="w-full h-full object-cover" />
+        
+        {/* Debug Overlay: Essential for high-confidence testing */}
+        {status === "ready" && (
+          <div className="absolute top-6 left-6 p-3 bg-black/60 backdrop-blur-md rounded-2xl border border-white/10 text-white text-xs flex items-center gap-2">
+            <Activity className="w-4 h-4 text-teal-400" />
+            <span>AI Sensitivity: <span className="text-teal-400 font-bold">0.85</span></span>
+          </div>
+        )}
+
         <AnimatePresence>
+          {debugPrediction && (
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute top-20 left-6 p-4 bg-teal-500 rounded-2xl text-white font-bold shadow-lg"
+            >
+              Detected: {debugPrediction.action.toUpperCase()} ({Math.round(debugPrediction.conf * 100)}%)
+            </motion.div>
+          )}
+
           {(status === "loading" || isSwitching) && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 flex flex-col items-center justify-center bg-black/90 z-50">
               <Loader2 className="w-12 h-12 animate-spin text-teal-500 mb-4" />
-              <p className="text-white font-medium">Calibrating AI...</p>
+              <p className="text-white font-medium">Initializing Vision Engine...</p>
             </motion.div>
           )}
         </AnimatePresence>
+
         {status === "ready" && !isSwitching && (
           <div className="absolute bottom-8 right-6 flex flex-col gap-4">
             {facingMode === "environment" && (
@@ -145,7 +205,7 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
                 {torch ? <Zap className="fill-current" /> : <ZapOff />}
               </button>
             )}
-            <button onClick={toggleCamera} className="p-5 bg-teal-500/20 hover:bg-teal-500/40 backdrop-blur-2xl rounded-full text-white border border-white/20">
+            <button onClick={toggleCamera} className="p-5 bg-white/10 hover:bg-white/20 backdrop-blur-2xl rounded-full text-white border border-white/20 transition-colors">
               <RotateCcw className="w-7 h-7" />
             </button>
           </div>

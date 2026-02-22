@@ -72,15 +72,14 @@ export class OneEuroFilter {
   }
 }
 
-/** * LandmarkSmoother — Optimized for mobile camera jitter.
- * Improved parameters for high-accuracy sign detection.
+/** * LandmarkSmoother — Optimized for the 1662-feature Holistic vector.
+ * Focuses smoothing on high-movement areas like hands.
  */
 export class LandmarkSmoother {
   private filters: OneEuroFilter[];
 
-  // UPDATED: minCutoff lowered to 0.5 to stop jitter when hand is still.
-  // UPDATED: beta increased to 0.1 to prevent "ghosting" lag when hand moves fast.
-  constructor(featureSize = 1662, freq = 30, minCutoff = 0.5, beta = 0.1) {
+  constructor(featureSize = 1662, freq = 30, minCutoff = 1.0, beta = 0.05) {
+    // We create a filter for every coordinate (x, y, z)
     this.filters = Array.from({ length: featureSize }, () => 
       new OneEuroFilter(freq, minCutoff, beta)
     );
@@ -92,7 +91,7 @@ export class LandmarkSmoother {
   smooth(features: Float32Array, ts?: number): Float32Array {
     const smoothed = new Float32Array(features.length);
     for (let i = 0; i < features.length; i++) {
-      // 0.0 is the default padding for missing landmarks
+      // Only smooth if the value isn't 0 (zero-padding from pushEmpty)
       if (features[i] !== 0) {
         smoothed[i] = this.filters[i].filter(features[i], ts);
       } else {
@@ -108,7 +107,7 @@ export class LandmarkSmoother {
   }
 }
 
-/** Legacy BBoxSmoother for UI elements */
+/** Legacy BBoxSmoother kept for YOLO UI drawing if needed */
 export class BBoxSmoother {
   private filters: [OneEuroFilter, OneEuroFilter, OneEuroFilter, OneEuroFilter];
 

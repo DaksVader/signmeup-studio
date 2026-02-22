@@ -3,8 +3,8 @@ import * as tf from "@tensorflow/tfjs";
 const MODEL_PATH = "/models/v_fixed_v3/model.json";
 const SEQUENCE_LENGTH = 30;
 const FEATURE_SIZE = 1662;
-// 0.70 is a great balance for mobile high-accuracy
-const CONFIDENCE_THRESHOLD = 0.70; 
+// Lower threshold to 0.5 to make it less "picky" while testing
+const CONFIDENCE_THRESHOLD = 0.85; 
 
 const ACTION_CLASSES = ["hello", "thanks", "iloveyou"];
 
@@ -13,11 +13,6 @@ class ActionLstmPipeline {
   private frameBuffer: Float32Array[] = [];
   private _ready = false;
   private isLoading = false;
-
-  // Anti-repeat logic variables
-  private lastDetectedAction: string = "";
-  private lastDetectionTime: number = 0;
-  private readonly COOLDOWN_MS = 2000; // 2 seconds between detections
 
   get ready() { return this._ready; }
 
@@ -65,35 +60,14 @@ class ActionLstmPipeline {
         }
       }
 
-      // Check threshold
       if (maxProb >= CONFIDENCE_THRESHOLD) {
-        const action = ACTION_CLASSES[maxIdx];
-        const now = Date.now();
-
-        // FIX: Prevent repeating the same sign immediately (Debouncing)
-        // If it's the same sign as before, wait for the COOLDOWN_MS to pass
-        if (action === this.lastDetectedAction && (now - this.lastDetectionTime) < this.COOLDOWN_MS) {
-          return null;
-        }
-
-        // Update tracking for next prediction
-        this.lastDetectedAction = action;
-        this.lastDetectionTime = now;
-        
-        return { action, confidence: maxProb };
+        return { action: ACTION_CLASSES[maxIdx], confidence: maxProb };
       }
-      
       return null;
-    } finally {
-      tensor.dispose();
-    }
+    } finally { tensor.dispose(); }
   }
 
-  clearBuffer(): void { 
-    this.frameBuffer = [];
-    this.lastDetectedAction = "";
-    this.lastDetectionTime = 0;
-  }
+  clearBuffer(): void { this.frameBuffer = []; }
 }
 
 export const actionLstmPipeline = new ActionLstmPipeline();

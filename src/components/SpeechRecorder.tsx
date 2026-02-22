@@ -10,218 +10,230 @@ interface SpeechRecorderProps {
   onDeleteHistory: () => void;
 }
 
-const speakText = (text: string) => {
-  if ('speechSynthesis' in window) {
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 0.9;
-    utterance.pitch = 1;
-    window.speechSynthesis.speak(utterance);
-  }
-};
-
-const MessageItem = ({ msg }: { msg: ChatMessage }) => (
-  <motion.div
-    key={msg.id}
-    initial={{ opacity: 0, y: 10 }}
-    animate={{ opacity: 1, y: 0 }}
-    exit={{ opacity: 0, x: -20 }}
-    className="group flex items-start gap-2 p-3 bg-secondary/50 rounded-lg"
-  >
-    <div className="flex-1">
-      <div className="flex items-center gap-2 mb-1">
-        <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-500">
-          🎤 Speech
-        </span>
-        <span className="text-xs text-muted-foreground">
-          {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-        </span>
-      </div>
-      <p className="text-foreground">{msg.text}</p>
-    </div>
-    <Button
-      variant="ghost"
-      size="icon"
-      className="opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8"
-      onClick={() => speakText(msg.text)}
-    >
-      <Volume2 className="w-4 h-4 text-muted-foreground hover:text-primary" />
-    </Button>
-  </motion.div>
-);
-
 const SpeechRecorder = ({ speechHistory, onSpeechMessage, onDeleteHistory }: SpeechRecorderProps) => {
   const [isRecording, setIsRecording] = useState(false);
   const [interimText, setInterimText] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  
   const recognitionRef = useRef<any>(null);
-  const fullTranscriptRef = useRef("");
-  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const finalTranscriptRef = useRef("");
+  const silenceTimerRef = useRef<any>(null);
 
-  // Helper to commit current text to history
-  const commitToHistory = useCallback(() => {
-    const finalSentence = fullTranscriptRef.current.trim();
-    if (finalSentence) {
-      onSpeechMessage(finalSentence);
-      fullTranscriptRef.current = "";
-      setInterimText("");
+  // --- NATIVE WEB TTS (Replaces Capacitor) ---
+  const handleSpeak = (text: string) => {
+    const synth = window.speechSynthesis;
+    if (synth) {
+      synth.cancel(); // Stop current speech
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'en-US';
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+      synth.speak(utterance);
     }
-  }, [onSpeechMessage]);
+  };
+
+  // --- REFINED FORMATTING LOGIC ---
+  const formatSpeechText = (raw: string) => {
+    let text = raw.trim();
+    if (!text) return "";
+
+    // 1. Fix casing for "I" and "I'm"
+    text = text.replace(/\bi\b/g, "I").replace(/\bi'm\b/gi, "I'm");
+
+    // 2. Capitalize the very first letter
+    text = text.charAt(0).toUpperCase() + text.slice(1);
+
+    // 3. Smart Punctuation
+    const questionStarters = ["who", "what", "where", "when", "why", "how", "is", "are", "can", "do", "did", "will", "could", "should", "would"];
+    const exclamationWords = ["wow", "hey", "hello", "great", "awesome", "stop"];
+    
+    const words = text.split(/\s+/);
+    const firstWord = words[0].toLowerCase();
+    const hasEndingPunctuation = /[.!?]$/.test(text);
+
+    if (!hasEndingPunctuation) {
+      if (questionStarters.includes(firstWord)) {
+        text += "?";
+      } else if (exclamationWords.includes(firstWord)) {
+        text += "!";
+      } else {
+        text += ".";
+      }
+    }
+
+    return text;
+  };
 
   const stopRecording = useCallback(() => {
-    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     if (recognitionRef.current) {
-      recognitionRef.current.stop();
-      recognitionRef.current = null;
+      try {
+        recognitionRef.current.stop();
+      } catch (e) {
+        console.warn("Recognition already stopped");
+      }
     }
-    commitToHistory();
+    
+    if (silenceTimerRef.current) {
+      window.clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
     setIsRecording(false);
-  }, [commitToHistory]);
+  }, []);
 
   const startRecording = useCallback(() => {
     setError(null);
-    fullTranscriptRef.current = "";
+    finalTranscriptRef.current = ""; 
     
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setError("Speech recognition is not supported in this browser.");
-      return;
-    }
-
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'en-US';
-
-    recognition.onstart = () => setIsRecording(true);
-
-    recognition.onresult = (event: any) => {
-      // Reset silence timer every time a result comes in
-      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    try {
+      const Win = window as any;
+      const SpeechLib = Win.SpeechRecognition || Win.webkitSpeechRecognition;
       
-      let currentInterim = "";
-      let newlyFinalized = "";
+      if (!SpeechLib) {
+        setError("Speech not supported");
+        return;
+      }
 
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript;
-        if (event.results[i].isFinal) {
-          newlyFinalized += transcript;
-        } else {
-          currentInterim += transcript;
+      const recognition = new SpeechLib();
+      recognition.continuous = true;
+      recognition.interimResults = true; 
+      recognition.lang = 'en-US';
+
+      recognition.onstart = () => {
+        setIsRecording(true);
+        setInterimText("");
+      };
+
+      recognition.onresult = (event: any) => {
+        if (silenceTimerRef.current) window.clearTimeout(silenceTimerRef.current);
+
+        let currentFullText = "";
+        let currentInterim = "";
+
+        // Rebuilding from index 0 prevents the "Mobile Doubling" issue
+        for (let i = 0; i < event.results.length; ++i) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            currentFullText += transcript;
+          } else {
+            currentInterim += transcript;
+          }
         }
-      }
+        
+        // Store the stable part in the ref
+        finalTranscriptRef.current = currentFullText;
+        // Show both finalized and interim text in UI
+        setInterimText((currentFullText + " " + currentInterim).trim());
+        
+        // Auto-stop after 2.5 seconds of silence
+        silenceTimerRef.current = window.setTimeout(() => stopRecording(), 2500);
+      };
 
-      if (newlyFinalized) fullTranscriptRef.current += " " + newlyFinalized;
-      setInterimText((fullTranscriptRef.current + " " + currentInterim).trim());
-
-      // Start a 3-second timer. If no speech, finalize the current sentence.
-      silenceTimerRef.current = setTimeout(() => {
-        commitToHistory();
-      }, 3000); 
-    };
-
-    recognition.onerror = (event: any) => {
-      if (event.error !== 'no-speech') {
-        setError(`Error: ${event.error}`);
+      recognition.onend = () => {
         setIsRecording(false);
-      }
-    };
+        const raw = (finalTranscriptRef.current || interimText).trim();
+        
+        if (raw) {
+          const formatted = formatSpeechText(raw);
+          onSpeechMessage(formatted);
+        }
+        setInterimText("");
+        finalTranscriptRef.current = "";
+      };
 
-    recognition.onend = () => {
-      if (isRecording) recognition.start(); // Auto-restart if we haven't manually stopped
-    };
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch (err) {
+      setError("Mic access failed");
+      setIsRecording(false);
+    }
+  }, [onSpeechMessage, stopRecording, interimText]);
 
-    recognitionRef.current = recognition;
-    recognition.start();
-  }, [isRecording, commitToHistory]);
-
-  const toggleRecording = useCallback(() => {
-    isRecording ? stopRecording() : startRecording();
-  }, [isRecording, startRecording, stopRecording]);
-
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      if (silenceTimerRef.current) window.clearTimeout(silenceTimerRef.current);
+      if (recognitionRef.current) recognitionRef.current.stop();
     };
   }, []);
 
   return (
-    <motion.div
-      initial={{ opacity: 0, scale: 0.95 }}
-      animate={{ opacity: 1, scale: 1 }}
-      className="glass-card-elevated h-full flex flex-col lg:col-span-2"
-    >
-      <div className="p-6 border-b border-border/50">
-        <div className="flex flex-col items-center justify-center gap-4 text-center">
-          <h2 className="font-display font-semibold text-foreground text-lg">Speech Mode</h2>
-          
-          <motion.button
-            onClick={toggleRecording}
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            className={`relative w-24 h-24 rounded-full flex items-center justify-center transition-all duration-300 ${
-              isRecording ? "bg-destructive text-white" : "bg-primary text-white"
-            }`}
-          >
-            {isRecording ? <MicOff className="w-10 h-10" /> : <Mic className="w-10 h-10" />}
-            {isRecording && (
-              <motion.span
-                animate={{ scale: [1, 1.4, 1], opacity: [0.5, 0, 0.5] }}
-                transition={{ repeat: Infinity, duration: 1.5 }}
-                className="absolute inset-0 rounded-full border-4 border-destructive"
-              />
-            )}
-          </motion.button>
-
-          <p className="text-sm text-muted-foreground">
-            {isRecording ? "Listening... History updates after 3s of silence" : "Tap to speak"}
-          </p>
-
-          <AnimatePresence>
-            {interimText && (
-              <motion.div 
-                initial={{ opacity: 0, y: 5 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="w-full max-w-md bg-background/80 rounded-lg border border-primary/20 p-4"
-              >
-                <p className="text-foreground italic">{interimText}</p>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
+    <div className="h-full flex flex-col items-center bg-background">
+      <div className="w-full p-8 border-b text-center flex flex-col items-center">
+        <h2 className="font-bold text-xl mb-6 text-foreground">Speech Mode</h2>
+        
+        <button
+          onClick={() => isRecording ? stopRecording() : startRecording()}
+          className={`w-24 h-24 rounded-full flex items-center justify-center transition-all shadow-xl active:scale-95 ${
+            isRecording ? "bg-red-500" : "bg-teal-700"
+          }`}
+        >
+          {isRecording ? <MicOff size={40} className="text-white" /> : <Mic size={40} className="text-white" />}
+        </button>
+        
+        <p className="mt-4 text-sm font-medium text-muted-foreground">
+          {isRecording ? "Listening..." : "Tap to record"}
+        </p>
+        
+        {interimText && (
+          <div className="mt-4 p-4 bg-secondary/20 rounded-xl border border-border/50 max-w-[90%]">
+            <p className="text-sm italic text-foreground/80 leading-relaxed">
+              "{interimText}"
+            </p>
+          </div>
+        )}
+        {error && <p className="text-destructive text-xs mt-2">{error}</p>}
       </div>
 
-      <div className="flex-1 flex flex-col min-h-0">
-        <div className="p-4 border-b border-border/50 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <MessageSquare className="w-5 h-5 text-primary" />
-            <h2 className="font-semibold">Speech History</h2>
-          </div>
-          {speechHistory.length > 0 && (
-            <Button variant="ghost" size="sm" onClick={onDeleteHistory}>
-              <Trash2 className="w-4 h-4" />
-            </Button>
+      <div className="flex-1 w-full overflow-y-auto p-4 space-y-4">
+        <div className="flex justify-between items-center px-2 mb-2">
+          <span className="text-sm font-bold flex items-center gap-2">
+            <MessageSquare size={16} className="text-teal-700"/> Speech History
+          </span>
+          {speechHistory.length > 0 && !showDeleteConfirm && (
+            <Trash2 
+              size={18} 
+              className="text-muted-foreground cursor-pointer active:text-destructive hover:text-red-500 transition-colors" 
+              onClick={() => setShowDeleteConfirm(true)} 
+            />
+          )}
+          {showDeleteConfirm && (
+            <div className="flex gap-3 text-[10px] font-black items-center bg-red-50 px-3 py-1 rounded-full border border-red-100">
+              <span className="text-red-600 cursor-pointer" onClick={() => { onDeleteHistory(); setShowDeleteConfirm(false); }}>CLEAR ALL</span>
+              <span className="text-slate-400 cursor-pointer" onClick={() => setShowDeleteConfirm(false)}>CANCEL</span>
+            </div>
           )}
         </div>
 
-        <div className="flex-1 p-4 overflow-y-auto">
-          <AnimatePresence mode="popLayout">
-            {speechHistory.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-muted-foreground text-sm italic">
-                No messages recorded
+        <div className="space-y-3">
+          {speechHistory.map((msg) => (
+            <div key={msg.id} className="flex items-center justify-between p-4 bg-secondary/10 rounded-2xl border border-border/40 shadow-sm transition-all hover:bg-secondary/20">
+              <div className="flex-1 pr-4">
+                 <div className="flex items-center gap-2 mb-1">
+                   <p className="text-[9px] font-bold text-teal-700 uppercase">Voice Entry</p>
+                   <span className="text-[8px] text-muted-foreground">
+                     {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                   </span>
+                 </div>
+                 <p className="text-sm leading-relaxed text-foreground">{msg.text}</p>
               </div>
-            ) : (
-              <div className="space-y-2">
-                {speechHistory.map((msg) => (
-                  <MessageItem key={msg.id} msg={msg} />
-                ))}
-              </div>
-            )}
-          </AnimatePresence>
+              <Button 
+                size="icon" 
+                variant="secondary" 
+                className="h-10 w-10 shrink-0 rounded-full bg-teal-700/10 text-teal-700 hover:bg-teal-700 hover:text-white transition-all"
+                onClick={() => handleSpeak(msg.text)}
+              >
+                <Volume2 size={20} />
+              </Button>
+            </div>
+          ))}
+          {speechHistory.length === 0 && (
+            <div className="text-center py-10 text-muted-foreground text-sm italic">
+              No recorded messages yet.
+            </div>
+          )}
         </div>
       </div>
-    </motion.div>
+    </div>
   );
 };
 

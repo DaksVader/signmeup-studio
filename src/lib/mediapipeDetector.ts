@@ -95,23 +95,16 @@ class HolisticDetector {
     const features = new Float32Array(FEATURE_LENGTH);
     let offset = 0;
 
-    // Detect if we are on a mobile device to handle mirroring
-    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-
+    // Decision: If user uses Left hand, we flip it to act like a Right hand for the model
+    // Back camera naturally flips coordinates, so we account for that too.
     const fill = (landmarks: any[] | undefined, count: number, dims: number, shouldMirror: boolean, hasVis = false) => {
       if (landmarks && landmarks.length > 0) {
         for (let i = 0; i < count; i++) {
           const lm = landmarks[i];
           if (lm) {
+            // Logic: Flip X if (BackCamera AND NOT mirroring) OR (LeftHand training as RightHand)
             let finalX = lm.x;
-            
-            // Logic: If on mobile front cam, we need to flip the coordinate system 
-            // back to "standard" so the AI doesn't get confused between left/right gestures.
-            if (isMobile && !isBackCamera) {
-                finalX = 1 - finalX;
-            }
-
-            // Secondary logic: Flip X if specific hand needs mirroring for the LSTM
+            if (isBackCamera) finalX = 1 - finalX; 
             if (shouldMirror) finalX = 1 - finalX;
 
             features[offset++] = finalX;
@@ -125,7 +118,9 @@ class HolisticDetector {
 
     fill(results.poseLandmarks, 33, 3, false, true);
     fill(results.faceLandmarks, 468, 3, false);
-    fill(results.leftHandLandmarks, 21, 3, true); 
+    
+    // We treat both hands as potential primary hands to feed the same LSTM inputs
+    fill(results.leftHandLandmarks, 21, 3, true); // Mirror left to look like right
     fill(results.rightHandLandmarks, 21, 3, false); 
     
     return features;
