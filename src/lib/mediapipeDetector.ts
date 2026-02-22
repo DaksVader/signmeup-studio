@@ -27,8 +27,10 @@ class HolisticDetector {
       this.holistic!.setOptions({
         modelComplexity: 1, 
         smoothLandmarks: true,
-        minDetectionConfidence: 0.7, 
-        minTrackingConfidence: 0.7,
+        // Adjusted for mobile sensor sensitivity
+        minDetectionConfidence: 0.5, 
+        minTrackingConfidence: 0.5,
+        refineFaceLandmarks: false,
       });
 
       this.holistic!.onResults((results: Results) => {
@@ -95,15 +97,34 @@ class HolisticDetector {
     const features = new Float32Array(FEATURE_LENGTH);
     let offset = 0;
 
+    // --- MOBILE SCALING LOGIC ---
+    // Calculate a standard scale based on hand size to normalize different distances
+    let scaleFactor = 1.0;
+    const activeHand = results.rightHandLandmarks || results.leftHandLandmarks;
+    if (activeHand && activeHand.length > 0) {
+      const wrist = activeHand[0];
+      const middleBase = activeHand[9];
+      // Calculate Euclidean distance between wrist and middle finger base
+      const dist = Math.sqrt(
+        Math.pow(wrist.x - middleBase.x, 2) + 
+        Math.pow(wrist.y - middleBase.y, 2)
+      );
+      // 0.15 is an empirical "sweet spot" for distance normalization
+      if (dist > 0) scaleFactor = 0.15 / dist;
+    }
+
     const fill = (landmarks: any[] | undefined, count: number, dims: number, shouldMirror: boolean, hasVis = false) => {
       if (landmarks && landmarks.length > 0) {
+        // Use the first landmark (wrist or nose) as the relative origin
+        const origin = landmarks[0]; 
+        
         for (let i = 0; i < count; i++) {
           const lm = landmarks[i];
           if (lm) {
-            // FIX: Normalize coordinates to remove mobile aspect ratio skewing
-            let finalX = lm.x;
-            let finalY = lm.y;
-            let finalZ = lm.z;
+            // Anchor coordinates to origin and apply scaling
+            let finalX = (lm.x - origin.x) * scaleFactor + 0.5;
+            let finalY = (lm.y - origin.y) * scaleFactor + 0.5;
+            let finalZ = (lm.z ?? 0) * scaleFactor;
 
             if (isBackCamera) finalX = 1 - finalX; 
             if (shouldMirror) finalX = 1 - finalX;
@@ -112,11 +133,16 @@ class HolisticDetector {
             features[offset++] = finalY;
             features[offset++] = finalZ;
             if (hasVis) features[offset++] = lm.visibility ?? 0;
-          } else { offset += (dims + (hasVis ? 1 : 0)); }
+          } else { 
+            offset += (dims + (hasVis ? 1 : 0)); 
+          }
         }
-      } else { offset += count * (dims + (hasVis ? 1 : 0)); }
+      } else { 
+        offset += count * (dims + (hasVis ? 1 : 0)); 
+      }
     };
 
+    // Fill features (Pose, Face, Hands)
     fill(results.poseLandmarks, 33, 3, false, true);
     fill(results.faceLandmarks, 468, 3, false);
     fill(results.leftHandLandmarks, 21, 3, true); 
