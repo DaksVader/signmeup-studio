@@ -14,7 +14,7 @@ const MODEL_PATH = "/models/v_fixed_v3/model.json";
 const SEQUENCE_LENGTH = 30;
 const FEATURE_SIZE = 1662;
 // 🔥 FIX: 0.85 is too strict for many LSTM models. 0.7 is better for real-time.
-const CONFIDENCE_THRESHOLD = 0.5; 
+const CONFIDENCE_THRESHOLD = 0.8; 
 
 const ACTION_CLASSES = ["hello", "thanks", "iloveyou"];
 
