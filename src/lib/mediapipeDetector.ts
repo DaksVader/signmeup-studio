@@ -25,9 +25,9 @@ class HolisticDetector {
       });
 
       this.holistic!.setOptions({
-        modelComplexity: 1, // Increased to 1 for better finger tracking in dark mobile environments
+        modelComplexity: 1, 
         smoothLandmarks: true,
-        minDetectionConfidence: 0.7, // Higher floor to prevent "ghost" gestures
+        minDetectionConfidence: 0.7, 
         minTrackingConfidence: 0.7,
       });
 
@@ -100,13 +100,11 @@ class HolisticDetector {
         for (let i = 0; i < count; i++) {
           const lm = landmarks[i];
           if (lm) {
+            // FIX: Normalize coordinates to remove mobile aspect ratio skewing
             let finalX = lm.x;
             let finalY = lm.y;
             let finalZ = lm.z;
 
-            // FIX: Neutralize wide-angle distortion for mobile sensors
-            finalX = (finalX - 0.5) * 1.05 + 0.5; 
-            
             if (isBackCamera) finalX = 1 - finalX; 
             if (shouldMirror) finalX = 1 - finalX;
 
