@@ -8,10 +8,7 @@ class HolisticDetector {
   private _ready = false;
   private isLoading = false;
   private resolveDetection: ((results: Results) => void) | null = null;
-  
-  // Track if a frame is currently being processed by the WASM engine
   private isProcessing = false;
-
   public lastResults: Results | null = null;
 
   get ready() { return this._ready; }
@@ -20,26 +17,22 @@ class HolisticDetector {
     if (this._ready || this.isLoading) return;
     this.isLoading = true;
 
+    console.log("DIAGNOSTIC: Starting Holistic Init"); // <--- LOOK FOR THIS
+
     try {
-      /**
-       * 🔥 PRODUCTION FIX:
-       * When bundled, the Holistic constructor can move to .default or be renamed.
-       * This "hunts" for the correct constructor to prevent "not a constructor" errors.
-       */
-      const HolisticConstructor = 
-        (HolisticModule as any).Holistic || 
-        (HolisticModule as any).default?.Holistic;
+      // The most aggressive constructor hunt possible
+      let H: any = HolisticModule;
+      if (H.default && H.default.Holistic) H = H.default.Holistic;
+      else if (H.Holistic) H = H.Holistic;
+      
+      console.log("DIAGNOSTIC: Constructor found:", typeof H);
 
-      if (!HolisticConstructor) {
-        throw new Error("MediaPipe Holistic constructor not found in module.");
-      }
-
-      this.holistic = new HolisticConstructor({
+      this.holistic = new H({
         locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}`,
       });
 
       this.holistic!.setOptions({
-        modelComplexity: 0, // Lite model for better stability
+        modelComplexity: 0,
         smoothLandmarks: true,
         minDetectionConfidence: 0.5,
         minTrackingConfidence: 0.5,
@@ -51,14 +44,11 @@ class HolisticDetector {
           this.resolveDetection(results);
           this.resolveDetection = null;
         }
-        // Frame finished processing
         this.isProcessing = false; 
       });
 
-      // Warm up the engine
       const canvas = document.createElement("canvas");
-      canvas.width = 64; 
-      canvas.height = 64;
+      canvas.width = 64; canvas.height = 64;
       await this.holistic!.send({ image: canvas });
 
       this._ready = true;
@@ -73,65 +63,36 @@ class HolisticDetector {
   }
 
   async extractFeatures(video: HTMLVideoElement): Promise<Float32Array | null> {
-    // Stop if engine is busy or video isn't ready
-    if (!this.holistic || !this._ready || this.isProcessing || video.readyState < 2) {
-      return null;
-    }
-
+    if (!this.holistic || !this._ready || this.isProcessing || video.readyState < 2) return null;
     try {
-      this.isProcessing = true; // Set lock
+      this.isProcessing = true;
       const results = await new Promise<Results>((resolve, reject) => {
-        // Safety timeout in case WASM hangs
-        const timeout = setTimeout(() => {
-          this.isProcessing = false;
-          reject("MediaPipe Timeout");
-        }, 1000);
-
-        this.resolveDetection = (res) => {
-          clearTimeout(timeout);
-          resolve(res);
-        };
-        
-        this.holistic!.send({ image: video }).catch(err => {
-          this.isProcessing = false;
-          reject(err);
-        });
+        const timeout = setTimeout(() => { this.isProcessing = false; reject("Timeout"); }, 1000);
+        this.resolveDetection = (res) => { clearTimeout(timeout); resolve(res); };
+        this.holistic!.send({ image: video }).catch(err => { this.isProcessing = false; reject(err); });
       });
-
       return this.resultsToFeatures(results);
-    } catch (err) {
-      console.warn("Detection failed or timed out:", err);
-      return null;
-    }
+    } catch (err) { return null; }
   }
 
   private resultsToFeatures(results: Results): Float32Array {
     const features = new Float32Array(FEATURE_LENGTH);
     let offset = 0;
-    
     const fill = (landmarks: any[] | undefined, count: number, dims: number, hasVis = false) => {
       if (landmarks && landmarks.length > 0) {
         for (let i = 0; i < count; i++) {
           const lm = landmarks[i];
           if (lm) {
-            features[offset++] = lm.x;
-            features[offset++] = lm.y;
-            features[offset++] = lm.z;
+            features[offset++] = lm.x; features[offset++] = lm.y; features[offset++] = lm.z;
             if (hasVis) features[offset++] = lm.visibility ?? 0;
-          } else {
-            offset += (dims + (hasVis ? 1 : 0));
-          }
+          } else { offset += (dims + (hasVis ? 1 : 0)); }
         }
-      } else {
-        offset += count * (dims + (hasVis ? 1 : 0));
-      }
+      } else { offset += count * (dims + (hasVis ? 1 : 0)); }
     };
-
     fill(results.poseLandmarks, 33, 3, true);
     fill(results.faceLandmarks, 468, 3);
     fill(results.leftHandLandmarks, 21, 3);
     fill(results.rightHandLandmarks, 21, 3);
-
     return features;
   }
 }
