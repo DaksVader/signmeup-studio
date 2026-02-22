@@ -25,9 +25,9 @@ class HolisticDetector {
       });
 
       this.holistic!.setOptions({
-        modelComplexity: 0,
+        modelComplexity: 0, // 0 is essential for stable Mobile FPS
         smoothLandmarks: true,
-        minDetectionConfidence: 0.5,
+        minDetectionConfidence: 0.6, // Slightly higher to reduce ghosting
         minTrackingConfidence: 0.5,
       });
 
@@ -95,15 +95,13 @@ class HolisticDetector {
     const features = new Float32Array(FEATURE_LENGTH);
     let offset = 0;
 
-    // Decision: If user uses Left hand, we flip it to act like a Right hand for the model
-    // Back camera naturally flips coordinates, so we account for that too.
     const fill = (landmarks: any[] | undefined, count: number, dims: number, shouldMirror: boolean, hasVis = false) => {
       if (landmarks && landmarks.length > 0) {
         for (let i = 0; i < count; i++) {
           const lm = landmarks[i];
           if (lm) {
-            // Logic: Flip X if (BackCamera AND NOT mirroring) OR (LeftHand training as RightHand)
             let finalX = lm.x;
+            // Coordinate Logic: Ensure mobile mirrors match desktop model expectations
             if (isBackCamera) finalX = 1 - finalX; 
             if (shouldMirror) finalX = 1 - finalX;
 
@@ -118,9 +116,7 @@ class HolisticDetector {
 
     fill(results.poseLandmarks, 33, 3, false, true);
     fill(results.faceLandmarks, 468, 3, false);
-    
-    // We treat both hands as potential primary hands to feed the same LSTM inputs
-    fill(results.leftHandLandmarks, 21, 3, true); // Mirror left to look like right
+    fill(results.leftHandLandmarks, 21, 3, true); 
     fill(results.rightHandLandmarks, 21, 3, false); 
     
     return features;

@@ -17,8 +17,6 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [isSwitching, setIsSwitching] = useState(false);
   const [torch, setTorch] = useState(false);
-  
-  // Debug state to show you the current confidence on mobile
   const [debugPrediction, setDebugPrediction] = useState<{action: string, conf: number} | null>(null);
 
   const processingLocked = useRef(false);
@@ -32,20 +30,6 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
       streamRef.current = null;
     }
   }, []);
-
-  const toggleTorch = async () => {
-    const track = streamRef.current?.getVideoTracks()[0];
-    if (track && facingMode === "environment") {
-      try {
-        const capabilities = track.getCapabilities() as any;
-        if (capabilities.torch) {
-          const newState = !torch;
-          await track.applyConstraints({ advanced: [{ torch: newState }] as any });
-          setTorch(newState);
-        }
-      } catch (e) { console.warn("Torch fail"); }
-    }
-  };
 
   const start = useCallback(async () => {
     cleanup();
@@ -76,56 +60,45 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
           return;
         }
 
-        // Set canvas internal dimensions to match video stream
         if (canvas.width !== video.videoWidth) {
           canvas.width = video.videoWidth;
           canvas.height = video.videoHeight;
         }
 
         ctx.save();
-        
-        // Mirroring logic for front camera
         if (facingMode === "user") {
           ctx.translate(canvas.width, 0);
           ctx.scale(-1, 1);
         }
 
-        // Draw video background
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
         if (holisticDetector.ready && !isPaused && !processingLocked.current) {
-          const isEnv = facingMode === "environment";
-          const features = await holisticDetector.extractFeatures(video, isEnv);
+          const features = await holisticDetector.extractFeatures(video, facingMode === "environment");
           const results = (holisticDetector as any).lastResults;
           
-          // Re-enabling hand traces (dots)
           if (results) {
             const win = window as any;
-            const drawUtils = win.drawConnectors && win.drawLandmarks;
-            
-            // Draw Hand Landmarks
+            // Draw Hand Landmarks with High Visibility Colors
             if (results.leftHandLandmarks) {
-              win.drawConnectors(ctx, results.leftHandLandmarks, HAND_CONNECTIONS, { color: "#00FF00", lineWidth: 2 });
+              win.drawConnectors(ctx, results.leftHandLandmarks, HAND_CONNECTIONS, { color: "#00FFCC", lineWidth: 3 });
               win.drawLandmarks(ctx, results.leftHandLandmarks, { color: "#FFFFFF", lineWidth: 1, radius: 2 });
             }
             if (results.rightHandLandmarks) {
-              win.drawConnectors(ctx, results.rightHandLandmarks, HAND_CONNECTIONS, { color: "#00FF00", lineWidth: 2 });
+              win.drawConnectors(ctx, results.rightHandLandmarks, HAND_CONNECTIONS, { color: "#00FFCC", lineWidth: 3 });
               win.drawLandmarks(ctx, results.rightHandLandmarks, { color: "#FFFFFF", lineWidth: 1, radius: 2 });
             }
           }
           
           if (features && (results?.leftHandLandmarks || results?.rightHandLandmarks)) {
-            // Apply smoothing for mobile stability
             const smoothedFeatures = smootherRef.current.smooth(features);
             actionLstmPipeline.pushFrame(smoothedFeatures);
             
             const prediction = await actionLstmPipeline.predict();
-            
             if (prediction) {
               onSignDetected(prediction.action);
-              // Brief visual feedback for debug
               setDebugPrediction({ action: prediction.action, conf: prediction.confidence });
-              setTimeout(() => setDebugPrediction(null), 1000);
+              setTimeout(() => setDebugPrediction(null), 1500);
             }
           }
         }
@@ -170,42 +143,36 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
         <video ref={videoRef} className="hidden" playsInline muted />
         <canvas ref={canvasRef} className="w-full h-full object-cover" />
         
-        {/* Debug Overlay: Essential for high-confidence testing */}
         {status === "ready" && (
-          <div className="absolute top-6 left-6 p-3 bg-black/60 backdrop-blur-md rounded-2xl border border-white/10 text-white text-xs flex items-center gap-2">
-            <Activity className="w-4 h-4 text-teal-400" />
-            <span>AI Sensitivity: <span className="text-teal-400 font-bold">0.85</span></span>
+          <div className="absolute top-6 left-6 p-3 bg-black/60 backdrop-blur-md rounded-2xl border border-white/10 text-white text-[10px] flex items-center gap-2">
+            <Activity className="w-3 h-3 text-teal-400" />
+            <span>SENSITIVITY: <span className="text-teal-400 font-bold">0.85</span></span>
           </div>
         )}
 
         <AnimatePresence>
           {debugPrediction && (
             <motion.div 
-              initial={{ opacity: 0, scale: 0.8 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute top-20 left-6 p-4 bg-teal-500 rounded-2xl text-white font-bold shadow-lg"
+              initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+              className="absolute top-16 left-6 p-4 bg-teal-600 rounded-2xl text-white shadow-lg border border-teal-400/50"
             >
-              Detected: {debugPrediction.action.toUpperCase()} ({Math.round(debugPrediction.conf * 100)}%)
+              <p className="text-[10px] font-black uppercase opacity-70">Detected Gesture</p>
+              <p className="text-lg font-bold">{debugPrediction.action.toUpperCase()}</p>
+              <p className="text-xs font-medium">{Math.round(debugPrediction.conf * 100)}% Certainty</p>
             </motion.div>
           )}
 
           {(status === "loading" || isSwitching) && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 flex flex-col items-center justify-center bg-black/90 z-50">
               <Loader2 className="w-12 h-12 animate-spin text-teal-500 mb-4" />
-              <p className="text-white font-medium">Initializing Vision Engine...</p>
+              <p className="text-white font-medium uppercase tracking-widest text-xs">Calibrating Lens...</p>
             </motion.div>
           )}
         </AnimatePresence>
 
         {status === "ready" && !isSwitching && (
           <div className="absolute bottom-8 right-6 flex flex-col gap-4">
-            {facingMode === "environment" && (
-              <button onClick={toggleTorch} className="p-4 bg-yellow-500/20 hover:bg-yellow-500/40 backdrop-blur-2xl rounded-full text-yellow-400 border border-yellow-500/30">
-                {torch ? <Zap className="fill-current" /> : <ZapOff />}
-              </button>
-            )}
-            <button onClick={toggleCamera} className="p-5 bg-white/10 hover:bg-white/20 backdrop-blur-2xl rounded-full text-white border border-white/20 transition-colors">
+            <button onClick={toggleCamera} className="p-5 bg-white/10 hover:bg-white/20 backdrop-blur-2xl rounded-full text-white border border-white/20 transition-all active:scale-90">
               <RotateCcw className="w-7 h-7" />
             </button>
           </div>
