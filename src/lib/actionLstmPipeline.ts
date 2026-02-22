@@ -1,20 +1,10 @@
-/**
- * Action LSTM Pipeline
- * 
- * Uses a TensorFlow.js LSTM model (converted from action.h5) to recognize
- * sign language actions from a 30-frame sliding window of MediaPipe Holistic
- * landmarks (1,662 features per frame).
- * 
- * Classes: hello, thanks, iloveyou
- */
-
 import * as tf from "@tensorflow/tfjs";
 
 const MODEL_PATH = "/models/v_fixed_v3/model.json";
 const SEQUENCE_LENGTH = 30;
 const FEATURE_SIZE = 1662;
-// 🔥 FIX: 0.85 is too strict for many LSTM models. 0.7 is better for real-time.
-const CONFIDENCE_THRESHOLD = 0.7; 
+// Lower threshold to 0.5 to make it less "picky" while testing
+const CONFIDENCE_THRESHOLD = 0.5; 
 
 const ACTION_CLASSES = ["hello", "thanks", "iloveyou"];
 
@@ -33,13 +23,10 @@ class ActionLstmPipeline {
       await tf.ready();
       this.model = await tf.loadLayersModel(MODEL_PATH);
       this._ready = true;
-      console.log("Action LSTM model loaded");
     } catch (e) {
-      console.error("Failed to load Action LSTM model:", e);
+      console.error("Model load error:", e);
       throw e;
-    } finally {
-      this.isLoading = false;
-    }
+    } finally { this.isLoading = false; }
   }
 
   pushFrame(features: Float32Array): void {
@@ -50,7 +37,6 @@ class ActionLstmPipeline {
   }
 
   async predict(): Promise<{ action: string; confidence: number } | null> {
-    // Only predict if we have a full sequence of 30 frames
     if (!this.model || this.frameBuffer.length < SEQUENCE_LENGTH) return null;
 
     const inputData = new Float32Array(SEQUENCE_LENGTH * FEATURE_SIZE);
@@ -78,9 +64,7 @@ class ActionLstmPipeline {
         return { action: ACTION_CLASSES[maxIdx], confidence: maxProb };
       }
       return null;
-    } finally {
-      tensor.dispose();
-    }
+    } finally { tensor.dispose(); }
   }
 
   clearBuffer(): void { this.frameBuffer = []; }

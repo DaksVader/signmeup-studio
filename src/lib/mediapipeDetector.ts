@@ -50,14 +50,12 @@ class HolisticDetector {
     }
   }
 
-  // Clears internal flags and pending promises
   reset() {
     this.isProcessing = false;
     this.resolveDetection = null;
     this.lastResults = null;
   }
 
-  // Force-rebind the model to clear hangs during camera switching
   async rebind() {
     this.reset();
     if (this.holistic) {
@@ -65,13 +63,11 @@ class HolisticDetector {
       canvas.width = 64; canvas.height = 64;
       try {
         await this.holistic.send({ image: canvas });
-      } catch (e) {
-        console.warn("Rebind dummy frame failed", e);
-      }
+      } catch (e) { console.warn("Rebind failed", e); }
     }
   }
 
-  async extractFeatures(video: HTMLVideoElement): Promise<Float32Array | null> {
+  async extractFeatures(video: HTMLVideoElement, isBackCamera: boolean = false): Promise<Float32Array | null> {
     if (!this.holistic || !this._ready || this.isProcessing || video.readyState < 2) return null;
 
     try {
@@ -81,33 +77,37 @@ class HolisticDetector {
           this.isProcessing = false;
           reject("Timeout");
         }, 1500);
-
         this.resolveDetection = (res) => {
           clearTimeout(timeout);
           resolve(res);
         };
-        
         this.holistic!.send({ image: video }).catch(err => {
           this.isProcessing = false;
           reject(err);
         });
       });
 
-      return this.resultsToFeatures(results);
-    } catch (err) {
-      return null;
-    }
+      return this.resultsToFeatures(results, isBackCamera);
+    } catch (err) { return null; }
   }
 
-  private resultsToFeatures(results: Results): Float32Array {
+  private resultsToFeatures(results: Results, isBackCamera: boolean): Float32Array {
     const features = new Float32Array(FEATURE_LENGTH);
     let offset = 0;
-    const fill = (landmarks: any[] | undefined, count: number, dims: number, hasVis = false) => {
+
+    // Decision: If user uses Left hand, we flip it to act like a Right hand for the model
+    // Back camera naturally flips coordinates, so we account for that too.
+    const fill = (landmarks: any[] | undefined, count: number, dims: number, shouldMirror: boolean, hasVis = false) => {
       if (landmarks && landmarks.length > 0) {
         for (let i = 0; i < count; i++) {
           const lm = landmarks[i];
           if (lm) {
-            features[offset++] = lm.x;
+            // Logic: Flip X if (BackCamera AND NOT mirroring) OR (LeftHand training as RightHand)
+            let finalX = lm.x;
+            if (isBackCamera) finalX = 1 - finalX; 
+            if (shouldMirror) finalX = 1 - finalX;
+
+            features[offset++] = finalX;
             features[offset++] = lm.y;
             features[offset++] = lm.z;
             if (hasVis) features[offset++] = lm.visibility ?? 0;
@@ -115,10 +115,14 @@ class HolisticDetector {
         }
       } else { offset += count * (dims + (hasVis ? 1 : 0)); }
     };
-    fill(results.poseLandmarks, 33, 3, true);
-    fill(results.faceLandmarks, 468, 3);
-    fill(results.leftHandLandmarks, 21, 3);
-    fill(results.rightHandLandmarks, 21, 3);
+
+    fill(results.poseLandmarks, 33, 3, false, true);
+    fill(results.faceLandmarks, 468, 3, false);
+    
+    // We treat both hands as potential primary hands to feed the same LSTM inputs
+    fill(results.leftHandLandmarks, 21, 3, true); // Mirror left to look like right
+    fill(results.rightHandLandmarks, 21, 3, false); 
+    
     return features;
   }
 }

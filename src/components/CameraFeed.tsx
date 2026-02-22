@@ -4,7 +4,7 @@ import { Loader2, RotateCcw, Zap, ZapOff } from "lucide-react";
 import { holisticDetector } from "@/lib/mediapipeDetector";
 import { actionLstmPipeline } from "@/lib/actionLstmPipeline";
 import { LandmarkSmoother } from "@/lib/oneEuroFilter";
-import { POSE_CONNECTIONS, HAND_CONNECTIONS } from "@mediapipe/holistic";
+import { HAND_CONNECTIONS } from "@mediapipe/holistic";
 
 const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any) => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -25,15 +25,8 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
     processingLocked.current = true;
     if (renderFrameRef.current) cancelAnimationFrame(renderFrameRef.current);
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => {
-        track.stop();
-        track.enabled = false;
-      });
+      streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
-    }
-    if (videoRef.current) {
-      videoRef.current.pause();
-      videoRef.current.srcObject = null;
     }
   }, []);
 
@@ -43,37 +36,27 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
       try {
         const capabilities = track.getCapabilities() as any;
         if (capabilities.torch) {
-          const newTorchState = !torch;
-          await track.applyConstraints({
-            advanced: [{ torch: newTorchState }] as any
-          });
-          setTorch(newTorchState);
+          const newState = !torch;
+          await track.applyConstraints({ advanced: [{ torch: newState }] as any });
+          setTorch(newState);
         }
-      } catch (e) { console.warn("Torch not supported"); }
+      } catch (e) { console.warn("Torch fail"); }
     }
   };
 
   const start = useCallback(async () => {
     cleanup();
     try {
-      const constraints = {
-        video: { 
-          facingMode: { ideal: facingMode },
-          width: { ideal: 720 },
-          height: { ideal: 1280 } 
-        }
-      };
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: facingMode }, width: { ideal: 720 }, height: { ideal: 1280 } }
+      });
       streamRef.current = stream;
-      
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
       }
 
       processingLocked.current = false;
-
       const loop = async () => {
         if (processingLocked.current || !videoRef.current || !canvasRef.current) return;
         const video = videoRef.current;
@@ -88,22 +71,18 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
         ctx.save();
-        if (facingMode === "user") {
-          ctx.translate(canvas.width, 0);
-          ctx.scale(-1, 1);
-        }
+        if (facingMode === "user") { ctx.translate(canvas.width, 0); ctx.scale(-1, 1); }
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
         if (holisticDetector.ready && !isPaused && !processingLocked.current) {
-          const features = await holisticDetector.extractFeatures(video);
+          // Send camera state to detector for coordinate normalization
+          const features = await holisticDetector.extractFeatures(video, facingMode === "environment");
           const results = (holisticDetector as any).lastResults;
           
           if (results) {
             const win = window as any;
-            if (win.drawConnectors) {
-              if (results.leftHandLandmarks) win.drawConnectors(ctx, results.leftHandLandmarks, HAND_CONNECTIONS, { color: "white", lineWidth: 2 });
-              if (results.rightHandLandmarks) win.drawConnectors(ctx, results.rightHandLandmarks, HAND_CONNECTIONS, { color: "white", lineWidth: 2 });
-            }
+            if (results.leftHandLandmarks) win.drawConnectors?.(ctx, results.leftHandLandmarks, HAND_CONNECTIONS, { color: "white", lineWidth: 2 });
+            if (results.rightHandLandmarks) win.drawConnectors?.(ctx, results.rightHandLandmarks, HAND_CONNECTIONS, { color: "white", lineWidth: 2 });
           }
           
           if (features && (results?.leftHandLandmarks || results?.rightHandLandmarks)) {
@@ -116,13 +95,7 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
         renderFrameRef.current = requestAnimationFrame(loop);
       };
       renderFrameRef.current = requestAnimationFrame(loop);
-    } catch (e) { 
-      if (facingMode === "environment") {
-        setFacingMode("user");
-        setSessionKey(k => k + 1);
-      }
-      setStatus("error"); 
-    }
+    } catch (e) { setStatus("error"); }
   }, [facingMode, isPaused, onSignDetected, cleanup]);
 
   const toggleCamera = async () => {
@@ -130,16 +103,11 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
     setIsSwitching(true);
     cleanup();
     setTorch(false);
-    
-    // Wipe MediaPipe memory
+    actionLstmPipeline.clearBuffer(); 
     await holisticDetector.reset(); 
-    await holisticDetector.rebind();
-    
-    // Hardware release timeout
-    await new Promise(r => setTimeout(r, 1200));
-    
-    setFacingMode(prev => prev === "user" ? "environment" : "user");
-    setSessionKey(prev => prev + 1);
+    await new Promise(r => setTimeout(r, 1000));
+    setFacingMode(p => p === "user" ? "environment" : "user");
+    setSessionKey(k => k + 1);
     setIsSwitching(false);
   };
 
@@ -159,30 +127,25 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
 
   return (
     <div className="flex flex-col items-center p-2 w-full max-w-2xl mx-auto">
-      {/* aspect-[3/4] provides a much larger vertical area on mobile phones */}
       <div key={sessionKey} className="relative aspect-[3/4] md:aspect-video bg-black rounded-[2.5rem] overflow-hidden w-full shadow-2xl border-4 border-white/10">
         <video ref={videoRef} className="hidden" playsInline muted />
         <canvas ref={canvasRef} className="w-full h-full object-cover" />
-        
         <AnimatePresence>
           {(status === "loading" || isSwitching) && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 flex flex-col items-center justify-center bg-black/90 z-50">
               <Loader2 className="w-12 h-12 animate-spin text-teal-500 mb-4" />
-              <p className="text-white font-medium tracking-wide">
-                {isSwitching ? "Switching Lens..." : "Connecting AI..."}
-              </p>
+              <p className="text-white font-medium">Calibrating AI...</p>
             </motion.div>
           )}
         </AnimatePresence>
-
         {status === "ready" && !isSwitching && (
           <div className="absolute bottom-8 right-6 flex flex-col gap-4">
             {facingMode === "environment" && (
-              <button onClick={toggleTorch} className="p-4 bg-yellow-500/20 hover:bg-yellow-500/40 backdrop-blur-2xl rounded-full text-yellow-400 border border-yellow-500/30 shadow-xl transition-all active:scale-90">
-                {torch ? <Zap className="w-6 h-6 fill-current" /> : <ZapOff className="w-6 h-6" />}
+              <button onClick={toggleTorch} className="p-4 bg-yellow-500/20 hover:bg-yellow-500/40 backdrop-blur-2xl rounded-full text-yellow-400 border border-yellow-500/30">
+                {torch ? <Zap className="fill-current" /> : <ZapOff />}
               </button>
             )}
-            <button onClick={toggleCamera} className="p-5 bg-teal-500/20 hover:bg-teal-500/40 backdrop-blur-2xl rounded-full text-white border border-white/20 shadow-xl transition-all active:scale-90">
+            <button onClick={toggleCamera} className="p-5 bg-teal-500/20 hover:bg-teal-500/40 backdrop-blur-2xl rounded-full text-white border border-white/20">
               <RotateCcw className="w-7 h-7" />
             </button>
           </div>
