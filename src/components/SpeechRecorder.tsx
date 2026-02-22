@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Mic, MicOff, MessageSquare, Trash2, Volume2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -55,11 +55,34 @@ const SpeechRecorder = ({ speechHistory, onSpeechMessage, onDeleteHistory }: Spe
   const [interimText, setInterimText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const recognitionRef = useRef<any>(null);
+  const fullTranscriptRef = useRef("");
+  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Helper to commit current text to history
+  const commitToHistory = useCallback(() => {
+    const finalSentence = fullTranscriptRef.current.trim();
+    if (finalSentence) {
+      onSpeechMessage(finalSentence);
+      fullTranscriptRef.current = "";
+      setInterimText("");
+    }
+  }, [onSpeechMessage]);
+
+  const stopRecording = useCallback(() => {
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
+    commitToHistory();
+    setIsRecording(false);
+  }, [commitToHistory]);
 
   const startRecording = useCallback(() => {
     setError(null);
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    fullTranscriptRef.current = "";
     
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
       setError("Speech recognition is not supported in this browser.");
       return;
@@ -70,31 +93,31 @@ const SpeechRecorder = ({ speechHistory, onSpeechMessage, onDeleteHistory }: Spe
     recognition.interimResults = true;
     recognition.lang = 'en-US';
 
-    recognition.onstart = () => {
-      setIsRecording(true);
-      setInterimText("");
-    };
+    recognition.onstart = () => setIsRecording(true);
 
     recognition.onresult = (event: any) => {
-      let interim = "";
-      let finalBatch = "";
+      // Reset silence timer every time a result comes in
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      
+      let currentInterim = "";
+      let newlyFinalized = "";
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
-          finalBatch += transcript;
+          newlyFinalized += transcript;
         } else {
-          interim += transcript;
+          currentInterim += transcript;
         }
       }
 
-      // FIX: Only trigger onSpeechMessage if we have a confirmed "Final" result
-      if (finalBatch.trim().length > 0) {
-        onSpeechMessage(finalBatch.trim());
-        setInterimText("");
-      } else {
-        setInterimText(interim);
-      }
+      if (newlyFinalized) fullTranscriptRef.current += " " + newlyFinalized;
+      setInterimText((fullTranscriptRef.current + " " + currentInterim).trim());
+
+      // Start a 3-second timer. If no speech, finalize the current sentence.
+      silenceTimerRef.current = setTimeout(() => {
+        commitToHistory();
+      }, 3000); 
     };
 
     recognition.onerror = (event: any) => {
@@ -105,24 +128,23 @@ const SpeechRecorder = ({ speechHistory, onSpeechMessage, onDeleteHistory }: Spe
     };
 
     recognition.onend = () => {
-      setIsRecording(false);
+      if (isRecording) recognition.start(); // Auto-restart if we haven't manually stopped
     };
 
     recognitionRef.current = recognition;
     recognition.start();
-  }, [onSpeechMessage]);
-
-  const stopRecording = useCallback(() => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-    }
-    setIsRecording(false);
-    setInterimText("");
-  }, []);
+  }, [isRecording, commitToHistory]);
 
   const toggleRecording = useCallback(() => {
     isRecording ? stopRecording() : startRecording();
   }, [isRecording, startRecording, stopRecording]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    };
+  }, []);
 
   return (
     <motion.div
@@ -131,7 +153,7 @@ const SpeechRecorder = ({ speechHistory, onSpeechMessage, onDeleteHistory }: Spe
       className="glass-card-elevated h-full flex flex-col lg:col-span-2"
     >
       <div className="p-6 border-b border-border/50">
-        <div className="flex flex-col items-center justify-center gap-4">
+        <div className="flex flex-col items-center justify-center gap-4 text-center">
           <h2 className="font-display font-semibold text-foreground text-lg">Speech Mode</h2>
           
           <motion.button
@@ -139,7 +161,7 @@ const SpeechRecorder = ({ speechHistory, onSpeechMessage, onDeleteHistory }: Spe
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             className={`relative w-24 h-24 rounded-full flex items-center justify-center transition-all duration-300 ${
-              isRecording ? "bg-destructive text-white shadow-lg" : "bg-primary text-white shadow-lg"
+              isRecording ? "bg-destructive text-white" : "bg-primary text-white"
             }`}
           >
             {isRecording ? <MicOff className="w-10 h-10" /> : <Mic className="w-10 h-10" />}
@@ -153,14 +175,20 @@ const SpeechRecorder = ({ speechHistory, onSpeechMessage, onDeleteHistory }: Spe
           </motion.button>
 
           <p className="text-sm text-muted-foreground">
-            {isRecording ? "Listening... Tap to stop" : "Tap to speak"}
+            {isRecording ? "Listening... History updates after 3s of silence" : "Tap to speak"}
           </p>
 
-          {interimText && (
-            <div className="w-full max-w-md bg-background/50 rounded-lg border border-primary/20 p-4">
-              <p className="text-foreground italic">{interimText}</p>
-            </div>
-          )}
+          <AnimatePresence>
+            {interimText && (
+              <motion.div 
+                initial={{ opacity: 0, y: 5 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="w-full max-w-md bg-background/80 rounded-lg border border-primary/20 p-4"
+              >
+                <p className="text-foreground italic">{interimText}</p>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </div>
 
@@ -181,7 +209,7 @@ const SpeechRecorder = ({ speechHistory, onSpeechMessage, onDeleteHistory }: Spe
           <AnimatePresence mode="popLayout">
             {speechHistory.length === 0 ? (
               <div className="h-full flex items-center justify-center text-muted-foreground text-sm italic">
-                No messages yet...
+                No messages recorded
               </div>
             ) : (
               <div className="space-y-2">
