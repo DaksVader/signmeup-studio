@@ -19,7 +19,6 @@ class HolisticDetector {
     console.log("DIAGNOSTIC: Initializing Holistic via Global Window");
 
     try {
-      // Access Holistic from the global window object (loaded via index.html)
       const HolisticConstructor = (window as any).Holistic;
 
       if (!HolisticConstructor) {
@@ -27,7 +26,10 @@ class HolisticDetector {
       }
 
       this.holistic = new HolisticConstructor({
-        locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}`,
+        // Hardcoding the specific version ensures dev/build consistency
+        locateFile: (file: string) => {
+          return `https://cdn.jsdelivr.net/npm/@mediapipe/holistic@0.5.1635989137/${file}`;
+        },
       });
 
       this.holistic!.setOptions({

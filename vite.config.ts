@@ -8,12 +8,20 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
     port: 8080,
+    fs: {
+      // Allow serving files from node_modules for MediaPipe assets in dev
+      allow: [".."],
+    },
+  },
+  optimizeDeps: {
+    // Force pre-bundling of MediaPipe to avoid dev-mode loading issues
+    include: ["@mediapipe/holistic", "@mediapipe/drawing_utils"],
   },
   build: {
     rollupOptions: {
       output: {
         manualChunks: {
-          vendor: ['react', 'react-dom'],
+          vendor: ["react", "react-dom"],
         },
       },
     },
@@ -23,7 +31,7 @@ export default defineConfig(({ mode }) => ({
     mode === "development" && componentTagger(),
     VitePWA({
       registerType: "autoUpdate",
-      injectRegister: 'inline', // Ensures the phone registers the SW immediately
+      injectRegister: "inline",
       includeAssets: ["favicon.ico", "icons/SignLogo.png", "icons/icon-192x192.png", "icons/icon-512x512.png"],
       manifest: {
         name: "SignSpeak",
@@ -31,7 +39,7 @@ export default defineConfig(({ mode }) => ({
         description: "Sign Language AI Recognition",
         theme_color: "#0D9488",
         background_color: "#f8fafb",
-        display: "standalone", // Makes it look like a real app on phone
+        display: "standalone",
         orientation: "portrait",
         start_url: "/",
         icons: [
@@ -41,11 +49,10 @@ export default defineConfig(({ mode }) => ({
         ],
       },
       workbox: {
-        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // Bumped to 5MB
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
         globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
         runtimeCaching: [
           {
-            // Cache MediaPipe WASM and data files (this is what the phone needs offline)
             urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/npm\/@mediapipe.*/i,
             handler: "CacheFirst",
             options: {
