@@ -10,7 +10,6 @@ interface SpeechRecorderProps {
   onDeleteHistory: () => void;
 }
 
-// Text-to-Speech helper
 const speakText = (text: string) => {
   if ('speechSynthesis' in window) {
     window.speechSynthesis.cancel();
@@ -21,7 +20,6 @@ const speakText = (text: string) => {
   }
 };
 
-// Message item with TTS support
 const MessageItem = ({ msg }: { msg: ChatMessage }) => (
   <motion.div
     key={msg.id}
@@ -46,7 +44,6 @@ const MessageItem = ({ msg }: { msg: ChatMessage }) => (
       size="icon"
       className="opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8"
       onClick={() => speakText(msg.text)}
-      title="Speak this message"
     >
       <Volume2 className="w-4 h-4 text-muted-foreground hover:text-primary" />
     </Button>
@@ -61,12 +58,10 @@ const SpeechRecorder = ({ speechHistory, onSpeechMessage, onDeleteHistory }: Spe
 
   const startRecording = useCallback(() => {
     setError(null);
-    
-    // Check for Web Speech API support
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     
     if (!SpeechRecognition) {
-      setError("Speech recognition is not supported in this browser. Please use Chrome or Edge.");
+      setError("Speech recognition is not supported in this browser.");
       return;
     }
 
@@ -82,19 +77,20 @@ const SpeechRecorder = ({ speechHistory, onSpeechMessage, onDeleteHistory }: Spe
 
     recognition.onresult = (event: any) => {
       let interim = "";
-      let final = "";
+      let finalBatch = "";
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
-          final += transcript;
+          finalBatch += transcript;
         } else {
           interim += transcript;
         }
       }
 
-      if (final) {
-        onSpeechMessage(final.trim());
+      // FIX: Only trigger onSpeechMessage if we have a confirmed "Final" result
+      if (finalBatch.trim().length > 0) {
+        onSpeechMessage(finalBatch.trim());
         setInterimText("");
       } else {
         setInterimText(interim);
@@ -102,20 +98,14 @@ const SpeechRecorder = ({ speechHistory, onSpeechMessage, onDeleteHistory }: Spe
     };
 
     recognition.onerror = (event: any) => {
-      console.error("Speech recognition error:", event.error);
-      if (event.error === 'not-allowed') {
-        setError("Microphone access was denied. Please allow microphone access and try again.");
-      } else if (event.error === 'no-speech') {
-        setError("No speech detected. Please try again.");
-      } else {
+      if (event.error !== 'no-speech') {
         setError(`Error: ${event.error}`);
+        setIsRecording(false);
       }
-      setIsRecording(false);
     };
 
     recognition.onend = () => {
       setIsRecording(false);
-      setInterimText("");
     };
 
     recognitionRef.current = recognition;
@@ -125,120 +115,74 @@ const SpeechRecorder = ({ speechHistory, onSpeechMessage, onDeleteHistory }: Spe
   const stopRecording = useCallback(() => {
     if (recognitionRef.current) {
       recognitionRef.current.stop();
-      recognitionRef.current = null;
     }
     setIsRecording(false);
     setInterimText("");
   }, []);
 
   const toggleRecording = useCallback(() => {
-    if (isRecording) {
-      stopRecording();
-    } else {
-      startRecording();
-    }
+    isRecording ? stopRecording() : startRecording();
   }, [isRecording, startRecording, stopRecording]);
 
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
-      transition={{ duration: 0.4, delay: 0.2 }}
       className="glass-card-elevated h-full flex flex-col lg:col-span-2"
     >
-      {/* Voice Recorder Section */}
       <div className="p-6 border-b border-border/50">
         <div className="flex flex-col items-center justify-center gap-4">
-          <h2 className="font-display font-semibold text-foreground text-lg">
-            Speech Mode
-          </h2>
+          <h2 className="font-display font-semibold text-foreground text-lg">Speech Mode</h2>
           
           <motion.button
             onClick={toggleRecording}
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             className={`relative w-24 h-24 rounded-full flex items-center justify-center transition-all duration-300 ${
-              isRecording 
-                ? "bg-destructive text-destructive-foreground shadow-lg shadow-destructive/30" 
-                : "bg-primary text-primary-foreground shadow-lg shadow-primary/30 hover:shadow-primary/50"
+              isRecording ? "bg-destructive text-white shadow-lg" : "bg-primary text-white shadow-lg"
             }`}
           >
-            {isRecording ? (
-              <>
-                <MicOff className="w-10 h-10" />
-                {/* Pulsing ring animation */}
-                <motion.span
-                  animate={{ scale: [1, 1.5, 1], opacity: [0.5, 0, 0.5] }}
-                  transition={{ repeat: Infinity, duration: 1.5 }}
-                  className="absolute inset-0 rounded-full border-4 border-destructive"
-                />
-              </>
-            ) : (
-              <Mic className="w-10 h-10" />
+            {isRecording ? <MicOff className="w-10 h-10" /> : <Mic className="w-10 h-10" />}
+            {isRecording && (
+              <motion.span
+                animate={{ scale: [1, 1.4, 1], opacity: [0.5, 0, 0.5] }}
+                transition={{ repeat: Infinity, duration: 1.5 }}
+                className="absolute inset-0 rounded-full border-4 border-destructive"
+              />
             )}
           </motion.button>
 
-          <p className="text-sm text-muted-foreground text-center">
-            {isRecording ? "Tap to stop recording" : "Tap to start recording"}
+          <p className="text-sm text-muted-foreground">
+            {isRecording ? "Listening... Tap to stop" : "Tap to speak"}
           </p>
 
-          {/* Live Preview / Interim Text */}
           {interimText && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="w-full max-w-md bg-background rounded-lg border-2 border-primary/30 p-4"
-            >
-              <p className="text-sm text-muted-foreground mb-1">Listening...</p>
+            <div className="w-full max-w-md bg-background/50 rounded-lg border border-primary/20 p-4">
               <p className="text-foreground italic">{interimText}</p>
-            </motion.div>
-          )}
-
-          {/* Error Message */}
-          {error && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="text-destructive text-sm text-center max-w-md"
-            >
-              {error}
-            </motion.div>
+            </div>
           )}
         </div>
       </div>
 
-      {/* Speech History */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col min-h-0">
         <div className="p-4 border-b border-border/50 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <MessageSquare className="w-5 h-5 text-primary" />
-            <h2 className="font-display font-semibold text-foreground">
-              Speech History
-            </h2>
+            <h2 className="font-semibold">Speech History</h2>
           </div>
           {speechHistory.length > 0 && (
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              onClick={onDeleteHistory}
-              className="text-muted-foreground hover:text-destructive"
-              title="Delete all history"
-            >
+            <Button variant="ghost" size="sm" onClick={onDeleteHistory}>
               <Trash2 className="w-4 h-4" />
             </Button>
           )}
         </div>
 
-        <div className="flex-1 min-h-0 p-4 overflow-y-auto">
+        <div className="flex-1 p-4 overflow-y-auto">
           <AnimatePresence mode="popLayout">
             {speechHistory.length === 0 ? (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="h-full flex items-center justify-center text-muted-foreground text-sm"
-              >
-                Your spoken messages will appear here
-              </motion.div>
+              <div className="h-full flex items-center justify-center text-muted-foreground text-sm italic">
+                No messages yet...
+              </div>
             ) : (
               <div className="space-y-2">
                 {speechHistory.map((msg) => (
