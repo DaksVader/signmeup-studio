@@ -1,28 +1,53 @@
-const cacheName = 'v1';
+const cacheName = 'v2'; // Increment version to force update
 const cacheAssets = [
+  '/',
   'index.html',
-  'style.css',
-  'main.js',
-  'manifest.json'
+  'manifest.json',
+  '/icons/SignLogo.png',
+  // MediaPipe core script
+  'https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js',
 ];
 
 // Call Install Event
 self.addEventListener('install', (e) => {
-  console.log('Service Worker: Installed');
+  console.log('SignSpeak SW: Installed');
   e.waitUntil(
     caches.open(cacheName).then((cache) => {
-      console.log('Service Worker: Caching Files');
-      cache.addAll(cacheAssets);
+      console.log('SignSpeak SW: Caching Files');
+      return cache.addAll(cacheAssets);
     }).then(() => self.skipWaiting())
   );
 });
 
 // Call Activate Event
 self.addEventListener('activate', (e) => {
-  console.log('Service Worker: Activated');
+  console.log('SignSpeak SW: Activated');
+  // Clean up old caches
+  e.waitUntil(
+    caches.keys().then(cacheNames => {
+      return Promise.all(
+        cacheNames.map(cache => {
+          if (cache !== cacheName) {
+            console.log('SignSpeak SW: Clearing Old Cache');
+            return caches.delete(cache);
+          }
+        })
+      );
+    })
+  );
 });
 
-// Call Fetch Event (This makes it work offline!)
+// Call Fetch Event (Offline Support)
 self.addEventListener('fetch', (e) => {
-  e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
+  e.respondWith(
+    caches.match(e.request).then((cachedResponse) => {
+      if (cachedResponse) {
+        return cachedResponse;
+      }
+      return fetch(e.request).then((networkResponse) => {
+        // Optional: Cache new requests on the fly
+        return networkResponse;
+      });
+    }).catch(() => caches.match('index.html'))
+  );
 });

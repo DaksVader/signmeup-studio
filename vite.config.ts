@@ -12,14 +12,11 @@ export default defineConfig(({ mode }) => ({
       overlay: false,
     },
   },
-  // 1. ADDED: This helps break your 2.13MB file into smaller chunks
   build: {
     rollupOptions: {
       output: {
         manualChunks: {
           vendor: ['react', 'react-dom'],
-          // If you use onnxruntime or tfjs, uncomment the line below:
-          // ai: ['onnxruntime-web'], 
         },
       },
     },
@@ -31,6 +28,7 @@ export default defineConfig(({ mode }) => ({
       registerType: "autoUpdate",
       includeAssets: [
         "favicon.ico",
+        "icons/SignLogo.png", // Updated to match your actual icon name
         "icons/icon-192x192.png",
         "icons/icon-512x512.png",
       ],
@@ -63,10 +61,24 @@ export default defineConfig(({ mode }) => ({
         ],
       },
       workbox: {
-        // 2. ADDED: Increase limit to 4MiB to accommodate your 2.13MB file
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024, 
         globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
         runtimeCaching: [
+          {
+            // 🔥 NEW: Cache MediaPipe JS and WASM files for offline use
+            urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/npm\/@mediapipe.*/i,
+            handler: "CacheFirst",
+            options: {
+              cacheName: "mediapipe-assets",
+              expiration: {
+                maxEntries: 20,
+                maxAgeSeconds: 60 * 60 * 24 * 365, // 1 year
+              },
+              cacheableResponse: {
+                statuses: [0, 200],
+              },
+            },
+          },
           {
             urlPattern: /\/models\/yolo\/bestv8\.onnx$/,
             handler: "CacheFirst",
