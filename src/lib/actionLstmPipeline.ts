@@ -4,7 +4,7 @@ const MODEL_PATH = "/models/v_fixed_v3/model.json";
 const SEQUENCE_LENGTH = 30;
 const FEATURE_SIZE = 1662;
 // Lower threshold to 0.5 to make it less "picky" while testing
-const CONFIDENCE_THRESHOLD = 0.75; 
+const CONFIDENCE_THRESHOLD = 0.85; 
 
 const ACTION_CLASSES = ["hello", "thanks", "iloveyou"];
 
