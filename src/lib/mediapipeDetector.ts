@@ -40,13 +40,9 @@ class HolisticDetector {
         this.isProcessing = false; 
       });
 
-      const canvas = document.createElement("canvas");
-      canvas.width = 64; canvas.height = 64;
-      await this.holistic!.send({ image: canvas });
-
+      await this.rebind();
       this._ready = true;
     } catch (e) {
-      console.error("Holistic Init Error:", e);
       this.isProcessing = false;
       throw e;
     } finally {
@@ -54,25 +50,27 @@ class HolisticDetector {
     }
   }
 
-  // Clear internal processing state during camera switch
-  reset() {
+  // Force-rebind the model to clear hangs during camera switching
+  async rebind() {
     this.isProcessing = false;
     this.resolveDetection = null;
-    this.lastResults = null;
+    if (this.holistic) {
+      const canvas = document.createElement("canvas");
+      canvas.width = 64; canvas.height = 64;
+      await this.holistic.send({ image: canvas });
+    }
   }
 
   async extractFeatures(video: HTMLVideoElement): Promise<Float32Array | null> {
-    if (!this.holistic || !this._ready || this.isProcessing || video.readyState < 2) {
-      return null;
-    }
+    if (!this.holistic || !this._ready || this.isProcessing || video.readyState < 2) return null;
 
     try {
       this.isProcessing = true;
       const results = await new Promise<Results>((resolve, reject) => {
         const timeout = setTimeout(() => {
           this.isProcessing = false;
-          reject("MediaPipe Timeout");
-        }, 2000); // 2s timeout for mobile switching lag
+          reject("Timeout");
+        }, 1500);
 
         this.resolveDetection = (res) => {
           clearTimeout(timeout);
@@ -94,7 +92,6 @@ class HolisticDetector {
   private resultsToFeatures(results: Results): Float32Array {
     const features = new Float32Array(FEATURE_LENGTH);
     let offset = 0;
-    
     const fill = (landmarks: any[] | undefined, count: number, dims: number, hasVis = false) => {
       if (landmarks && landmarks.length > 0) {
         for (let i = 0; i < count; i++) {
@@ -104,20 +101,14 @@ class HolisticDetector {
             features[offset++] = lm.y;
             features[offset++] = lm.z;
             if (hasVis) features[offset++] = lm.visibility ?? 0;
-          } else {
-            offset += (dims + (hasVis ? 1 : 0));
-          }
+          } else { offset += (dims + (hasVis ? 1 : 0)); }
         }
-      } else {
-        offset += count * (dims + (hasVis ? 1 : 0));
-      }
+      } else { offset += count * (dims + (hasVis ? 1 : 0)); }
     };
-
     fill(results.poseLandmarks, 33, 3, true);
     fill(results.faceLandmarks, 468, 3);
     fill(results.leftHandLandmarks, 21, 3);
     fill(results.rightHandLandmarks, 21, 3);
-
     return features;
   }
 }
