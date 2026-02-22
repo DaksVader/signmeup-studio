@@ -16,24 +16,20 @@ class HolisticDetector {
     if (this._ready || this.isLoading) return;
     this.isLoading = true;
 
-    console.log("DIAGNOSTIC: Initializing Holistic via Global Window");
-
     try {
       const HolisticConstructor = (window as any).Holistic;
-
       if (!HolisticConstructor) {
-        throw new Error("MediaPipe Holistic script not found on window. Check index.html script tag.");
+        throw new Error("MediaPipe Holistic script not found on window.");
       }
 
       this.holistic = new HolisticConstructor({
-        // Hardcoding the specific version ensures dev/build consistency
         locateFile: (file: string) => {
-          return `https://cdn.jsdelivr.net/npm/@mediapipe/holistic@0.5.1635989137/${file}`;
+          return `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}`;
         },
       });
 
       this.holistic!.setOptions({
-        modelComplexity: 0,
+        modelComplexity: 0, // 0 is fast (Mobile), 1 is balanced, 2 is heavy
         smoothLandmarks: true,
         minDetectionConfidence: 0.5,
         minTrackingConfidence: 0.5,
@@ -75,7 +71,7 @@ class HolisticDetector {
         const timeout = setTimeout(() => {
           this.isProcessing = false;
           reject("MediaPipe Timeout");
-        }, 1000);
+        }, 1500); // Increased timeout for mobile
 
         this.resolveDetection = (res) => {
           clearTimeout(timeout);
