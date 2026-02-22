@@ -6,36 +6,21 @@
     <title>SignSpeak – Sign Language Recognition</title>
     
     <meta name="description" content="Real-time sign language recognition powered by AI. Works offline as a PWA." />
-    <meta name="author" content="SignSpeak" />
     <meta name="theme-color" content="#0D9488" />
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js" crossorigin="anonymous"></script>
+
     <link rel="manifest" href="/manifest.json">
     <link rel="icon" href="/favicon.ico" />
     <link rel="apple-touch-icon" href="/icons/SignLogo.png" />
-
-    <meta property="og:title" content="SignSpeak – Sign Language Recognition" />
-    <meta property="og:description" content="Real-time sign language recognition powered by AI" />
-    <meta property="og:type" content="website" />
-    <meta property="og:image" content="/icons/icon-SignLogov2.png" />
-
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:image" content="/icons/icon-SignLogov2.png" />
   </head>
-
   <body>
     <div id="root"></div>
-    
     <script type="module" src="/src/main.tsx"></script>
-
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-          // Register the sw.js located in your public folder
-          navigator.serviceWorker
-            .register('/sw.js')
+          navigator.serviceWorker.register('/sw.js')
             .then(reg => console.log('SignSpeak SW: Registered'))
             .catch(err => console.error('SignSpeak SW: Registration failed:', err));
         });

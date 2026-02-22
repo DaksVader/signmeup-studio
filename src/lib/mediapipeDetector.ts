@@ -1,4 +1,3 @@
-import * as HolisticModule from "@mediapipe/holistic";
 import type { Holistic as HolisticType, Results } from "@mediapipe/holistic";
 
 const FEATURE_LENGTH = 1662;
@@ -17,17 +16,17 @@ class HolisticDetector {
     if (this._ready || this.isLoading) return;
     this.isLoading = true;
 
-    console.log("DIAGNOSTIC: Starting Holistic Init"); // <--- LOOK FOR THIS
+    console.log("DIAGNOSTIC: Initializing Holistic via Global Window");
 
     try {
-      // The most aggressive constructor hunt possible
-      let H: any = HolisticModule;
-      if (H.default && H.default.Holistic) H = H.default.Holistic;
-      else if (H.Holistic) H = H.Holistic;
-      
-      console.log("DIAGNOSTIC: Constructor found:", typeof H);
+      // Access Holistic from the global window object (loaded via index.html)
+      const HolisticConstructor = (window as any).Holistic;
 
-      this.holistic = new H({
+      if (!HolisticConstructor) {
+        throw new Error("MediaPipe Holistic script not found on window. Check index.html script tag.");
+      }
+
+      this.holistic = new HolisticConstructor({
         locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}`,
       });
 
@@ -47,6 +46,7 @@ class HolisticDetector {
         this.isProcessing = false; 
       });
 
+      // Warm up
       const canvas = document.createElement("canvas");
       canvas.width = 64; canvas.height = 64;
       await this.holistic!.send({ image: canvas });
@@ -63,36 +63,62 @@ class HolisticDetector {
   }
 
   async extractFeatures(video: HTMLVideoElement): Promise<Float32Array | null> {
-    if (!this.holistic || !this._ready || this.isProcessing || video.readyState < 2) return null;
+    if (!this.holistic || !this._ready || this.isProcessing || video.readyState < 2) {
+      return null;
+    }
+
     try {
       this.isProcessing = true;
       const results = await new Promise<Results>((resolve, reject) => {
-        const timeout = setTimeout(() => { this.isProcessing = false; reject("Timeout"); }, 1000);
-        this.resolveDetection = (res) => { clearTimeout(timeout); resolve(res); };
-        this.holistic!.send({ image: video }).catch(err => { this.isProcessing = false; reject(err); });
+        const timeout = setTimeout(() => {
+          this.isProcessing = false;
+          reject("MediaPipe Timeout");
+        }, 1000);
+
+        this.resolveDetection = (res) => {
+          clearTimeout(timeout);
+          resolve(res);
+        };
+        
+        this.holistic!.send({ image: video }).catch(err => {
+          this.isProcessing = false;
+          reject(err);
+        });
       });
+
       return this.resultsToFeatures(results);
-    } catch (err) { return null; }
+    } catch (err) {
+      return null;
+    }
   }
 
   private resultsToFeatures(results: Results): Float32Array {
     const features = new Float32Array(FEATURE_LENGTH);
     let offset = 0;
+    
     const fill = (landmarks: any[] | undefined, count: number, dims: number, hasVis = false) => {
       if (landmarks && landmarks.length > 0) {
         for (let i = 0; i < count; i++) {
           const lm = landmarks[i];
           if (lm) {
-            features[offset++] = lm.x; features[offset++] = lm.y; features[offset++] = lm.z;
+            features[offset++] = lm.x;
+            features[offset++] = lm.y;
+            features[offset++] = lm.z;
             if (hasVis) features[offset++] = lm.visibility ?? 0;
-          } else { offset += (dims + (hasVis ? 1 : 0)); }
+          } else {
+            offset += (dims + (hasVis ? 1 : 0));
+          }
         }
-      } else { offset += count * (dims + (hasVis ? 1 : 0)); }
+      } else {
+        offset += count * (dims + (hasVis ? 1 : 0));
+      }
     };
+
     fill(results.poseLandmarks, 33, 3, true);
     fill(results.faceLandmarks, 468, 3);
     fill(results.leftHandLandmarks, 21, 3);
     fill(results.rightHandLandmarks, 21, 3);
+
     return features;
   }
 }
