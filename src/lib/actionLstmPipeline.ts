@@ -5,7 +5,7 @@ const SEQUENCE_LENGTH = 30;
 const FEATURE_SIZE = 1662;
 
 // INCREASED THRESHOLD & STABILITY
-const CONFIDENCE_THRESHOLD = 0.92; // Higher floor for mobile
+const CONFIDENCE_THRESHOLD = 0.85; // Higher floor for mobile
 const STABILITY_WINDOW = 8; // Must be steady for ~8 frames (~250ms)
 
 const ACTION_CLASSES = ["hello", "thanks", "iloveyou"];
