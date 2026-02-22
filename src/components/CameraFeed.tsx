@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Loader2, RotateCcw } from "lucide-react";
+import { Loader2, RotateCcw, Zap, ZapOff } from "lucide-react";
 import { holisticDetector } from "@/lib/mediapipeDetector";
 import { actionLstmPipeline } from "@/lib/actionLstmPipeline";
 import { LandmarkSmoother } from "@/lib/oneEuroFilter";
@@ -12,22 +12,18 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
   const renderFrameRef = useRef<number | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   
-  // sessionKey forces a "Hard Remount" of the video/canvas elements
   const [sessionKey, setSessionKey] = useState(0);
   const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [isSwitching, setIsSwitching] = useState(false);
+  const [torch, setTorch] = useState(false);
   
-  // This ref acts as a circuit breaker for the AI loop
   const processingLocked = useRef(false);
   const smootherRef = useRef(new LandmarkSmoother(1662));
 
   const cleanup = useCallback(() => {
     processingLocked.current = true;
-    if (renderFrameRef.current) {
-      cancelAnimationFrame(renderFrameRef.current);
-      renderFrameRef.current = null;
-    }
+    if (renderFrameRef.current) cancelAnimationFrame(renderFrameRef.current);
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => {
         track.stop();
@@ -41,28 +37,30 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
     }
   }, []);
 
-  const draw = (ctx: CanvasRenderingContext2D, results: any) => {
-    const win = window as any;
-    if (!results || !win.drawConnectors) return;
-    if (results.leftHandLandmarks) {
-      win.drawConnectors(ctx, results.leftHandLandmarks, HAND_CONNECTIONS, { color: "white", lineWidth: 2 });
-      win.drawLandmarks(ctx, results.leftHandLandmarks, { color: "#10b981", lineWidth: 1, radius: 2 });
-    }
-    if (results.rightHandLandmarks) {
-      win.drawConnectors(ctx, results.rightHandLandmarks, HAND_CONNECTIONS, { color: "white", lineWidth: 2 });
-      win.drawLandmarks(ctx, results.rightHandLandmarks, { color: "#0ea5e9", lineWidth: 1, radius: 2 });
+  const toggleTorch = async () => {
+    const track = streamRef.current?.getVideoTracks()[0];
+    if (track && facingMode === "environment") {
+      try {
+        const capabilities = track.getCapabilities() as any;
+        if (capabilities.torch) {
+          const newTorchState = !torch;
+          await track.applyConstraints({
+            advanced: [{ torch: newTorchState }] as any
+          });
+          setTorch(newTorchState);
+        }
+      } catch (e) { console.warn("Torch not supported"); }
     }
   };
 
   const start = useCallback(async () => {
     cleanup();
     try {
-      // Use ideal constraints to allow the browser to pick the best back camera
       const constraints = {
         video: { 
-          width: { ideal: 640 }, 
-          height: { ideal: 480 }, 
-          facingMode: { ideal: facingMode } 
+          facingMode: { ideal: facingMode },
+          width: { ideal: 720 },
+          height: { ideal: 1280 } 
         }
       };
 
@@ -78,7 +76,6 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
 
       const loop = async () => {
         if (processingLocked.current || !videoRef.current || !canvasRef.current) return;
-        
         const video = videoRef.current;
         const canvas = canvasRef.current;
         const ctx = canvas.getContext("2d", { alpha: false });
@@ -88,9 +85,8 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
           return;
         }
 
-        if (canvas.width !== video.videoWidth) canvas.width = video.videoWidth;
-        if (canvas.height !== video.videoHeight) canvas.height = video.videoHeight;
-
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
         ctx.save();
         if (facingMode === "user") {
           ctx.translate(canvas.width, 0);
@@ -99,29 +95,32 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
         if (holisticDetector.ready && !isPaused && !processingLocked.current) {
-          try {
-            const features = await holisticDetector.extractFeatures(video);
-            const results = (holisticDetector as any).lastResults;
-            
-            if (results) draw(ctx, results);
-            
-            if (features && (results?.leftHandLandmarks || results?.rightHandLandmarks)) {
-              const smoothed = smootherRef.current.smooth(features);
-              actionLstmPipeline.pushFrame(smoothed);
-              const prediction = await actionLstmPipeline.predict();
-              if (prediction) onSignDetected(prediction.action);
+          const features = await holisticDetector.extractFeatures(video);
+          const results = (holisticDetector as any).lastResults;
+          
+          if (results) {
+            const win = window as any;
+            if (win.drawConnectors) {
+              if (results.leftHandLandmarks) win.drawConnectors(ctx, results.leftHandLandmarks, HAND_CONNECTIONS, { color: "white", lineWidth: 2 });
+              if (results.rightHandLandmarks) win.drawConnectors(ctx, results.rightHandLandmarks, HAND_CONNECTIONS, { color: "white", lineWidth: 2 });
             }
-          } catch (e) {
-            // Frame skip during heavy processing
+          }
+          
+          if (features && (results?.leftHandLandmarks || results?.rightHandLandmarks)) {
+            actionLstmPipeline.pushFrame(smootherRef.current.smooth(features));
+            const prediction = await actionLstmPipeline.predict();
+            if (prediction) onSignDetected(prediction.action);
           }
         }
         ctx.restore();
         renderFrameRef.current = requestAnimationFrame(loop);
       };
-      
       renderFrameRef.current = requestAnimationFrame(loop);
     } catch (e) { 
-      console.error("Camera Switch Error:", e);
+      if (facingMode === "environment") {
+        setFacingMode("user");
+        setSessionKey(k => k + 1);
+      }
       setStatus("error"); 
     }
   }, [facingMode, isPaused, onSignDetected, cleanup]);
@@ -129,15 +128,18 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
   const toggleCamera = async () => {
     if (isSwitching) return;
     setIsSwitching(true);
-    
     cleanup();
-    await holisticDetector.rebind(); // Clears MediaPipe buffer
+    setTorch(false);
     
-    // Hard wait for mobile hardware to release sensor
-    await new Promise(r => setTimeout(r, 1000));
+    // Wipe MediaPipe memory
+    await holisticDetector.reset(); 
+    await holisticDetector.rebind();
+    
+    // Hardware release timeout
+    await new Promise(r => setTimeout(r, 1200));
     
     setFacingMode(prev => prev === "user" ? "environment" : "user");
-    setSessionKey(prev => prev + 1); // Triggers remount and useEffect
+    setSessionKey(prev => prev + 1);
     setIsSwitching(false);
   };
 
@@ -156,35 +158,34 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
   }, [isActive, sessionKey, start, cleanup, onModelsLoaded]);
 
   return (
-    <div className="flex flex-col items-center p-4 w-full">
-      {/* sessionKey here forces React to recreate this entire DOM branch */}
-      <div key={sessionKey} className="relative aspect-video bg-black rounded-3xl overflow-hidden w-full shadow-2xl border border-white/5">
+    <div className="flex flex-col items-center p-2 w-full max-w-2xl mx-auto">
+      {/* aspect-[3/4] provides a much larger vertical area on mobile phones */}
+      <div key={sessionKey} className="relative aspect-[3/4] md:aspect-video bg-black rounded-[2.5rem] overflow-hidden w-full shadow-2xl border-4 border-white/10">
         <video ref={videoRef} className="hidden" playsInline muted />
         <canvas ref={canvasRef} className="w-full h-full object-cover" />
         
         <AnimatePresence>
           {(status === "loading" || isSwitching) && (
-            <motion.div 
-              initial={{ opacity: 0 }} 
-              animate={{ opacity: 1 }} 
-              exit={{ opacity: 0 }} 
-              className="absolute inset-0 flex flex-col items-center justify-center bg-black/90 z-50"
-            >
-              <Loader2 className="w-10 h-10 animate-spin text-teal-500 mb-4" />
-              <p className="text-white text-sm font-medium">
-                {isSwitching ? "Flipping Camera Lens..." : "Connecting to AI..."}
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 flex flex-col items-center justify-center bg-black/90 z-50">
+              <Loader2 className="w-12 h-12 animate-spin text-teal-500 mb-4" />
+              <p className="text-white font-medium tracking-wide">
+                {isSwitching ? "Switching Lens..." : "Connecting AI..."}
               </p>
             </motion.div>
           )}
         </AnimatePresence>
 
         {status === "ready" && !isSwitching && (
-          <button 
-            onClick={toggleCamera} 
-            className="absolute bottom-6 right-6 p-4 bg-teal-600/20 hover:bg-teal-600/40 backdrop-blur-2xl rounded-full text-white border border-white/20 shadow-xl transition-all active:scale-95"
-          >
-            <RotateCcw className="w-6 h-6" />
-          </button>
+          <div className="absolute bottom-8 right-6 flex flex-col gap-4">
+            {facingMode === "environment" && (
+              <button onClick={toggleTorch} className="p-4 bg-yellow-500/20 hover:bg-yellow-500/40 backdrop-blur-2xl rounded-full text-yellow-400 border border-yellow-500/30 shadow-xl transition-all active:scale-90">
+                {torch ? <Zap className="w-6 h-6 fill-current" /> : <ZapOff className="w-6 h-6" />}
+              </button>
+            )}
+            <button onClick={toggleCamera} className="p-5 bg-teal-500/20 hover:bg-teal-500/40 backdrop-blur-2xl rounded-full text-white border border-white/20 shadow-xl transition-all active:scale-90">
+              <RotateCcw className="w-7 h-7" />
+            </button>
+          </div>
         )}
       </div>
     </div>

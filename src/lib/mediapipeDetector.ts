@@ -50,14 +50,24 @@ class HolisticDetector {
     }
   }
 
-  // Force-rebind the model to clear hangs during camera switching
-  async rebind() {
+  // Clears internal flags and pending promises
+  reset() {
     this.isProcessing = false;
     this.resolveDetection = null;
+    this.lastResults = null;
+  }
+
+  // Force-rebind the model to clear hangs during camera switching
+  async rebind() {
+    this.reset();
     if (this.holistic) {
       const canvas = document.createElement("canvas");
       canvas.width = 64; canvas.height = 64;
-      await this.holistic.send({ image: canvas });
+      try {
+        await this.holistic.send({ image: canvas });
+      } catch (e) {
+        console.warn("Rebind dummy frame failed", e);
+      }
     }
   }
 
