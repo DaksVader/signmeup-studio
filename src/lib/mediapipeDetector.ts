@@ -1,9 +1,10 @@
-import { Holistic, Results } from "@mediapipe/holistic";
+import * as HolisticModule from "@mediapipe/holistic";
+import type { Holistic as HolisticType, Results } from "@mediapipe/holistic";
 
 const FEATURE_LENGTH = 1662;
 
 class HolisticDetector {
-  private holistic: Holistic | null = null;
+  private holistic: HolisticType | null = null;
   private _ready = false;
   private isLoading = false;
   private resolveDetection: ((results: Results) => void) | null = null;
@@ -20,18 +21,31 @@ class HolisticDetector {
     this.isLoading = true;
 
     try {
-      this.holistic = new Holistic({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}`,
+      /**
+       * 🔥 PRODUCTION FIX:
+       * When bundled, the Holistic constructor can move to .default or be renamed.
+       * This "hunts" for the correct constructor to prevent "not a constructor" errors.
+       */
+      const HolisticConstructor = 
+        (HolisticModule as any).Holistic || 
+        (HolisticModule as any).default?.Holistic;
+
+      if (!HolisticConstructor) {
+        throw new Error("MediaPipe Holistic constructor not found in module.");
+      }
+
+      this.holistic = new HolisticConstructor({
+        locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}`,
       });
 
-      this.holistic.setOptions({
-        modelComplexity: 0, // 🔥 Changed to 0 (Lite) for better performance/stability
+      this.holistic!.setOptions({
+        modelComplexity: 0, // Lite model for better stability
         smoothLandmarks: true,
         minDetectionConfidence: 0.5,
         minTrackingConfidence: 0.5,
       });
 
-      this.holistic.onResults((results: Results) => {
+      this.holistic!.onResults((results: Results) => {
         this.lastResults = results;
         if (this.resolveDetection) {
           this.resolveDetection(results);
@@ -41,10 +55,11 @@ class HolisticDetector {
         this.isProcessing = false; 
       });
 
-      // Warm up
+      // Warm up the engine
       const canvas = document.createElement("canvas");
-      canvas.width = 64; canvas.height = 64;
-      await this.holistic.send({ image: canvas });
+      canvas.width = 64; 
+      canvas.height = 64;
+      await this.holistic!.send({ image: canvas });
 
       this._ready = true;
       console.log("Holistic Detector Ready");
@@ -58,7 +73,7 @@ class HolisticDetector {
   }
 
   async extractFeatures(video: HTMLVideoElement): Promise<Float32Array | null> {
-    // 🔥 Stop if engine is busy or video isn't ready to prevent WASM "Abort"
+    // Stop if engine is busy or video isn't ready
     if (!this.holistic || !this._ready || this.isProcessing || video.readyState < 2) {
       return null;
     }
