@@ -18,18 +18,14 @@ class HolisticDetector {
 
     try {
       const HolisticConstructor = (window as any).Holistic;
-      if (!HolisticConstructor) {
-        throw new Error("MediaPipe Holistic script not found on window.");
-      }
+      if (!HolisticConstructor) throw new Error("MediaPipe Holistic script not found.");
 
       this.holistic = new HolisticConstructor({
-        locateFile: (file: string) => {
-          return `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}`;
-        },
+        locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}`,
       });
 
       this.holistic!.setOptions({
-        modelComplexity: 0, // 0 is fast (Mobile), 1 is balanced, 2 is heavy
+        modelComplexity: 0,
         smoothLandmarks: true,
         minDetectionConfidence: 0.5,
         minTrackingConfidence: 0.5,
@@ -44,13 +40,11 @@ class HolisticDetector {
         this.isProcessing = false; 
       });
 
-      // Warm up
       const canvas = document.createElement("canvas");
       canvas.width = 64; canvas.height = 64;
       await this.holistic!.send({ image: canvas });
 
       this._ready = true;
-      console.log("Holistic Detector Ready");
     } catch (e) {
       console.error("Holistic Init Error:", e);
       this.isProcessing = false;
@@ -58,6 +52,13 @@ class HolisticDetector {
     } finally {
       this.isLoading = false;
     }
+  }
+
+  // Clear internal processing state during camera switch
+  reset() {
+    this.isProcessing = false;
+    this.resolveDetection = null;
+    this.lastResults = null;
   }
 
   async extractFeatures(video: HTMLVideoElement): Promise<Float32Array | null> {
@@ -71,7 +72,7 @@ class HolisticDetector {
         const timeout = setTimeout(() => {
           this.isProcessing = false;
           reject("MediaPipe Timeout");
-        }, 1500); // Increased timeout for mobile
+        }, 2000); // 2s timeout for mobile switching lag
 
         this.resolveDetection = (res) => {
           clearTimeout(timeout);

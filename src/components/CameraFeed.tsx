@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { Loader2, RotateCcw } from "lucide-react";
 import { holisticDetector } from "@/lib/mediapipeDetector";
 import { actionLstmPipeline } from "@/lib/actionLstmPipeline";
@@ -26,14 +26,26 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: Came
   const facingModeRef = useRef<FacingMode>("user");
 
   const [status, setStatus] = useState<ModelStatus>("loading");
+  const [isSwitching, setIsSwitching] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>("");
   const smootherRef = useRef(new LandmarkSmoother(1662));
 
+  // COMPLETELY STOP AND RELEASE CAMERA
   const stopStream = useCallback(() => {
-    if (renderFrameRef.current) cancelAnimationFrame(renderFrameRef.current);
-    if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
-    renderFrameRef.current = null;
-    streamRef.current = null;
+    if (renderFrameRef.current) {
+      cancelAnimationFrame(renderFrameRef.current);
+      renderFrameRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => {
+        track.stop(); // Stops the hardware
+        track.enabled = false;
+      });
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
   }, []);
 
   const drawLandmarksOnCanvas = (ctx: CanvasRenderingContext2D, results: any) => {
@@ -61,14 +73,16 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: Came
     if (!videoRef.current) return;
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      const constraints = {
         video: { 
           width: { ideal: 640 }, 
           height: { ideal: 480 }, 
           frameRate: { ideal: 30 },
-          facingMode: mode 
+          facingMode: { ideal: mode } // Use ideal to avoid "NotReadableError"
         },
-      });
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
       videoRef.current.srcObject = stream;
 
@@ -80,7 +94,7 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: Came
       });
 
       const renderLoop = async () => {
-        if (isStoppingRef.current || !videoRef.current || !canvasRef.current) return;
+        if (isStoppingRef.current || isSwitching || !videoRef.current || !canvasRef.current) return;
         
         const video = videoRef.current;
         const canvas = canvasRef.current;
@@ -97,7 +111,7 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: Came
         }
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        if (holisticDetector.ready && !isPaused) {
+        if (holisticDetector.ready && !isPaused && !isSwitching) {
           try {
             const features = await holisticDetector.extractFeatures(video);
             const results = (holisticDetector as any).lastResults;
@@ -113,7 +127,7 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: Came
               }
             }
           } catch (err) {
-            // Silently catch frame errors to keep loop running
+            // Frame skip
           }
         }
 
@@ -123,14 +137,23 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: Came
 
       renderLoop();
     } catch (err) {
+      console.error("Camera switch error:", err);
       setStatus("error");
-      setErrorMessage("Camera access denied.");
     }
-  }, [isPaused, onSignDetected, stopStream]);
+  }, [isPaused, isSwitching, onSignDetected, stopStream]);
 
   const toggleCamera = async () => {
+    if (isSwitching) return;
+    
+    setIsSwitching(true);
+    stopStream();
+    
+    // Give mobile hardware a 500ms breather to release the camera
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
     facingModeRef.current = facingModeRef.current === "user" ? "environment" : "user";
     await startStream(facingModeRef.current);
+    setIsSwitching(false);
   };
 
   useEffect(() => {
@@ -165,17 +188,26 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: Came
         <video ref={videoRef} className="hidden" playsInline muted />
         <canvas ref={canvasRef} className="w-full h-full object-cover" />
         
-        {status === "loading" && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 text-white z-10">
-            <Loader2 className="w-10 h-10 animate-spin text-teal-500 mb-4" />
-            <p className="font-medium animate-pulse text-center px-4">Initializing AI Vision...</p>
-          </div>
-        )}
+        <AnimatePresence>
+          {(status === "loading" || isSwitching) && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 text-white z-50"
+            >
+              <Loader2 className="w-10 h-10 animate-spin text-teal-500 mb-4" />
+              <p className="font-medium animate-pulse">
+                {isSwitching ? "Switching Camera..." : "Initializing AI..."}
+              </p>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-        {status === "ready" && (
+        {status === "ready" && !isSwitching && (
           <button
             onClick={toggleCamera}
-            className="absolute bottom-4 right-4 z-20 p-3 bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/20 rounded-full text-white transition-all active:scale-90"
+            className="absolute bottom-4 right-4 z-20 p-4 bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/20 rounded-full text-white transition-all active:scale-90 shadow-lg"
           >
             <RotateCcw className="w-6 h-6" />
           </button>
