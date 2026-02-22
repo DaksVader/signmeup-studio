@@ -11,22 +11,34 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderFrameRef = useRef<number | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  
+  // sessionKey forces a "Hard Remount" of the video/canvas elements
+  const [sessionKey, setSessionKey] = useState(0);
   const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [isSwitching, setIsSwitching] = useState(false);
+  
+  // This ref acts as a circuit breaker for the AI loop
+  const processingLocked = useRef(false);
   const smootherRef = useRef(new LandmarkSmoother(1662));
 
   const cleanup = useCallback(() => {
-    if (renderFrameRef.current) cancelAnimationFrame(renderFrameRef.current);
+    processingLocked.current = true;
+    if (renderFrameRef.current) {
+      cancelAnimationFrame(renderFrameRef.current);
+      renderFrameRef.current = null;
+    }
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current.getTracks().forEach(track => {
+        track.stop();
+        track.enabled = false;
+      });
+      streamRef.current = null;
     }
     if (videoRef.current) {
       videoRef.current.pause();
       videoRef.current.srcObject = null;
     }
-    renderFrameRef.current = null;
-    streamRef.current = null;
   }, []);
 
   const draw = (ctx: CanvasRenderingContext2D, results: any) => {
@@ -45,27 +57,40 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
   const start = useCallback(async () => {
     cleanup();
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: facingMode }
-      });
+      // Use ideal constraints to allow the browser to pick the best back camera
+      const constraints = {
+        video: { 
+          width: { ideal: 640 }, 
+          height: { ideal: 480 }, 
+          facingMode: { ideal: facingMode } 
+        }
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
+      
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
       }
 
+      processingLocked.current = false;
+
       const loop = async () => {
-        if (!videoRef.current || !canvasRef.current || isSwitching) return;
+        if (processingLocked.current || !videoRef.current || !canvasRef.current) return;
+        
         const video = videoRef.current;
         const canvas = canvasRef.current;
         const ctx = canvas.getContext("2d", { alpha: false });
-        if (!ctx || video.paused) {
+        
+        if (!ctx || video.paused || video.readyState < 2) {
           renderFrameRef.current = requestAnimationFrame(loop);
           return;
         }
 
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
+        if (canvas.width !== video.videoWidth) canvas.width = video.videoWidth;
+        if (canvas.height !== video.videoHeight) canvas.height = video.videoHeight;
+
         ctx.save();
         if (facingMode === "user") {
           ctx.translate(canvas.width, 0);
@@ -73,30 +98,46 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
         }
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        if (holisticDetector.ready && !isPaused) {
-          const features = await holisticDetector.extractFeatures(video);
-          const results = (holisticDetector as any).lastResults;
-          if (results) draw(ctx, results);
-          if (features && (results?.leftHandLandmarks || results?.rightHandLandmarks)) {
-            const smoothed = smootherRef.current.smooth(features);
-            actionLstmPipeline.pushFrame(smoothed);
-            const prediction = await actionLstmPipeline.predict();
-            if (prediction) onSignDetected(prediction.action);
+        if (holisticDetector.ready && !isPaused && !processingLocked.current) {
+          try {
+            const features = await holisticDetector.extractFeatures(video);
+            const results = (holisticDetector as any).lastResults;
+            
+            if (results) draw(ctx, results);
+            
+            if (features && (results?.leftHandLandmarks || results?.rightHandLandmarks)) {
+              const smoothed = smootherRef.current.smooth(features);
+              actionLstmPipeline.pushFrame(smoothed);
+              const prediction = await actionLstmPipeline.predict();
+              if (prediction) onSignDetected(prediction.action);
+            }
+          } catch (e) {
+            // Frame skip during heavy processing
           }
         }
         ctx.restore();
         renderFrameRef.current = requestAnimationFrame(loop);
       };
-      loop();
-    } catch (e) { setStatus("error"); }
-  }, [facingMode, isPaused, isSwitching, onSignDetected, cleanup]);
+      
+      renderFrameRef.current = requestAnimationFrame(loop);
+    } catch (e) { 
+      console.error("Camera Switch Error:", e);
+      setStatus("error"); 
+    }
+  }, [facingMode, isPaused, onSignDetected, cleanup]);
 
   const toggleCamera = async () => {
+    if (isSwitching) return;
     setIsSwitching(true);
+    
     cleanup();
-    await holisticDetector.rebind(); // Reset AI internal state
-    await new Promise(r => setTimeout(r, 600)); // Mobile hardware cooldown
+    await holisticDetector.rebind(); // Clears MediaPipe buffer
+    
+    // Hard wait for mobile hardware to release sensor
+    await new Promise(r => setTimeout(r, 1000));
+    
     setFacingMode(prev => prev === "user" ? "environment" : "user");
+    setSessionKey(prev => prev + 1); // Triggers remount and useEffect
     setIsSwitching(false);
   };
 
@@ -112,25 +153,36 @@ const CameraFeed = ({ isActive, isPaused, onSignDetected, onModelsLoaded }: any)
       init();
     }
     return () => cleanup();
-  }, [isActive, facingMode, start, cleanup, onModelsLoaded]);
+  }, [isActive, sessionKey, start, cleanup, onModelsLoaded]);
 
   return (
     <div className="flex flex-col items-center p-4 w-full">
-      <div className="relative aspect-video bg-black rounded-3xl overflow-hidden w-full shadow-2xl border border-white/5">
+      {/* sessionKey here forces React to recreate this entire DOM branch */}
+      <div key={sessionKey} className="relative aspect-video bg-black rounded-3xl overflow-hidden w-full shadow-2xl border border-white/5">
         <video ref={videoRef} className="hidden" playsInline muted />
         <canvas ref={canvasRef} className="w-full h-full object-cover" />
         
         <AnimatePresence>
           {(status === "loading" || isSwitching) && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 flex flex-col items-center justify-center bg-black/90 z-50">
+            <motion.div 
+              initial={{ opacity: 0 }} 
+              animate={{ opacity: 1 }} 
+              exit={{ opacity: 0 }} 
+              className="absolute inset-0 flex flex-col items-center justify-center bg-black/90 z-50"
+            >
               <Loader2 className="w-10 h-10 animate-spin text-teal-500 mb-4" />
-              <p className="text-white text-sm font-medium">{isSwitching ? "Syncing Sensors..." : "Initializing..."}</p>
+              <p className="text-white text-sm font-medium">
+                {isSwitching ? "Flipping Camera Lens..." : "Connecting to AI..."}
+              </p>
             </motion.div>
           )}
         </AnimatePresence>
 
         {status === "ready" && !isSwitching && (
-          <button onClick={toggleCamera} className="absolute bottom-6 right-6 p-4 bg-teal-600/20 hover:bg-teal-600/40 backdrop-blur-2xl rounded-full text-white border border-white/20 shadow-xl transition-all active:scale-90">
+          <button 
+            onClick={toggleCamera} 
+            className="absolute bottom-6 right-6 p-4 bg-teal-600/20 hover:bg-teal-600/40 backdrop-blur-2xl rounded-full text-white border border-white/20 shadow-xl transition-all active:scale-95"
+          >
             <RotateCcw className="w-6 h-6" />
           </button>
         )}
