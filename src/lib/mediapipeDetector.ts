@@ -25,10 +25,10 @@ class HolisticDetector {
       });
 
       this.holistic!.setOptions({
-        modelComplexity: 1, // Increased to 1 for better finger tracking in dark mobile environments
+        modelComplexity: 0, // 0 is essential for stable Mobile FPS
         smoothLandmarks: true,
-        minDetectionConfidence: 0.7, // Higher floor to prevent "ghost" gestures
-        minTrackingConfidence: 0.7,
+        minDetectionConfidence: 0.6, // Slightly higher to reduce ghosting
+        minTrackingConfidence: 0.5,
       });
 
       this.holistic!.onResults((results: Results) => {
@@ -101,18 +101,13 @@ class HolisticDetector {
           const lm = landmarks[i];
           if (lm) {
             let finalX = lm.x;
-            let finalY = lm.y;
-            let finalZ = lm.z;
-
-            // FIX: Neutralize wide-angle distortion for mobile sensors
-            finalX = (finalX - 0.5) * 1.05 + 0.5; 
-            
+            // Coordinate Logic: Ensure mobile mirrors match desktop model expectations
             if (isBackCamera) finalX = 1 - finalX; 
             if (shouldMirror) finalX = 1 - finalX;
 
             features[offset++] = finalX;
-            features[offset++] = finalY;
-            features[offset++] = finalZ;
+            features[offset++] = lm.y;
+            features[offset++] = lm.z;
             if (hasVis) features[offset++] = lm.visibility ?? 0;
           } else { offset += (dims + (hasVis ? 1 : 0)); }
         }
